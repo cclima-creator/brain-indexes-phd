@@ -4,7 +4,7 @@ activity from the approximately Gaussian distribution expected for background
 fluctuations. Events exceeding this threshold are subsequently used to
 construct neuronal avalanches
 
-## 2- time bin
+## 2- time bin SHOULD BE IEI_average (average time between events)
 """
 
 """
