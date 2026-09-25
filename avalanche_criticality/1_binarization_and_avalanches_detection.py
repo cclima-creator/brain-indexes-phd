@@ -1,11 +1,11 @@
-##binarization:
+"""##binarization:
 ## 1- identify a threshold separating the distribution of neuronal
 activity from the approximately Gaussian distribution expected for background
 fluctuations. Events exceeding this threshold are subsequently used to
 construct neuronal avalanches
 
 ## 2- time bin
-
+"""
 
 """
 Binarizzazione EEG e rilevamento di neuronal avalanches
