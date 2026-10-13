@@ -10,6 +10,7 @@ Tutti i grafici. Ogni funzione riceve dati e percorsi.
 Stile da articolo (paper_style) e tutte le scritte nelle figure in inglese.
 Unici calcoli qui: test tra gruppi da annotare sulle figure e IC bootstrap della fig. 8.
 """
+import warnings
 from pathlib import Path
 
 import numpy as np
@@ -18,6 +19,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import matplotlib.colors as mcolors
 from scipy import stats
+from scipy.optimize import curve_fit
 
 from .summary_stats import compare_groups
 
@@ -86,7 +88,9 @@ def _grid(n, ncols=5, h=3.2, w=4.0):
 def _save(fig, path):
     """Salva la figura. Se il file vecchio e' bloccato (aperto in un visualizzatore, OneDrive...)
     prova a cancellarlo; se non si puo', salva con suffisso _new e avvisa invece di fermarsi."""
-    fig.tight_layout()
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")      # figure con gridspec annidati: avviso innocuo
+        fig.tight_layout()
     path = Path(path)
     try:
         try:
@@ -306,14 +310,29 @@ def _runs(mask):
     return list(zip(np.flatnonzero(edges == 1), np.flatnonzero(edges == -1) - 1))
 
 
-def amplitude_deviation_from_gaussian(store, group, n_boot=2000, seed=0):
+def _keep_runs(mask, min_run):
+    """Tiene solo i tratti di almeno min_run bin consecutivi (toglie i bin isolati dovuti al caso)."""
+    out = np.zeros_like(mask)
+    for i0, i1 in _runs(mask):
+        if i1 - i0 + 1 >= min_run:
+            out[i0:i1 + 1] = True
+    return out
+
+
+def amplitude_deviation_from_gaussian(store, group, n_boot=2000, seed=0, sd_levels=(1, 2, 3, 4, 5),
+                                      min_run=3):
     """
-    Distribuzione delle ampiezze z-scored di un gruppo vs gaussiana di fit.
+    Distribuzione delle ampiezze z-scored di un gruppo vs la SUA gaussiana di fit.
+    - le ampiezze sono z-scored per canale (ogni canale ha media 0 e SD 1): asse x in unita' di SD
     - densita' del gruppo = media delle densita' dei soggetti (ogni soggetto pesa uguale)
     - IC 95% = bootstrap sui soggetti
-    - gaussiana di fit: media e SD della densita' del gruppo (metodo dei momenti)
+    - gaussiana di fit: minimi quadrati sulla densita' del gruppo (mu, sigma liberi), quindi
+      ogni gruppo ha la propria gaussiana adattata alla parte centrale della propria distribuzione.
+      (Con il metodo dei momenti uscirebbe sempre circa N(0,1) per costruzione dello z-score.)
     - deviazione: bin con dati in cui la gaussiana cade FUORI dall'IC 95% del gruppo
-      ('heavier' = dati sopra la gaussiana, 'lighter' = sotto).
+      ('heavier' = dati sopra la gaussiana, 'lighter' = sotto). Contano solo tratti di almeno
+      min_run bin consecutivi: con ~200 bin, il 5% cadrebbe fuori dall'IC per puro caso.
+    - tail: per k in sd_levels, % di campioni oltre ±k SD nei dati e nella gaussiana di fit.
     Ritorna dict (None se il gruppo non ha soggetti).
     """
     items = [s for s in store if s["group"] == group]
@@ -331,39 +350,66 @@ def amplitude_deviation_from_gaussian(store, group, n_boot=2000, seed=0):
     boot = W @ D / n
     lo, hi = np.percentile(boot, [2.5, 97.5], axis=0)
 
-    mass = (dens * w).sum()
-    mu = (c * dens * w).sum() / mass
-    sigma = np.sqrt((((c - mu) ** 2) * dens * w).sum() / mass)
+    mass = (dens * w).sum()                       # punto di partenza: media e SD dei dati
+    mu0 = (c * dens * w).sum() / mass
+    sd0 = np.sqrt((((c - mu0) ** 2) * dens * w).sum() / mass)
+    try:
+        (mu, sigma), _ = curve_fit(lambda x, m, s: stats.norm.pdf(x, m, s), c, dens,
+                                   p0=[mu0, sd0], bounds=([-np.inf, 1e-6], [np.inf, np.inf]))
+    except RuntimeError:
+        mu, sigma = mu0, sd0
     gauss = stats.norm.pdf(c, mu, sigma)
 
     has_data = dens > 0
-    heavier = has_data & (gauss < lo)
-    lighter = has_data & (gauss > hi)
+    heavier = _keep_runs(has_data & (gauss < lo), min_run)
+    lighter = _keep_runs(has_data & (gauss > hi), min_run)
+
+    tail = []
+    for k in sd_levels:
+        data_pct = 100 * (dens * w)[np.abs(c) > k].sum()
+        gauss_pct = 100 * (stats.norm.sf(k, mu, sigma) + stats.norm.cdf(-k, mu, sigma))
+        tail.append(dict(sd=k, data_pct=data_pct, gauss_pct=gauss_pct,
+                         ratio=data_pct / gauss_pct if gauss_pct > 0 else np.nan))
+
     st = [s["amp"]["stats"] for s in items]
     return dict(centers=c, D=D, density=dens, lo=lo, hi=hi, mu=mu, sigma=sigma, gauss=gauss,
-                heavier=heavier, lighter=lighter, n=n,
+                heavier=heavier, lighter=lighter, n=n, tail=tail,
                 kurtosis=np.mean([x["excess_kurtosis"] for x in st]),
-                frac3=np.mean([x["frac_beyond_3sd"] for x in st]),
                 ks=np.mean([x["ks_D_vs_gauss"] for x in st]))
 
 
-def plot_amplitude_z_group(store, group, color, out_png, n_boot=2000, seed=0):
+def _fmt_pct(v):
+    if not np.isfinite(v):
+        return "n.a."
+    return "0" if v == 0 else f"{v:.2g}%" if v < 0.01 else f"{v:.2f}%"
+
+
+def plot_amplitude_z_group(store, group, color, out_png, n_boot=2000, seed=0,
+                           sd_levels=(1, 2, 3, 4, 5)):
     """
     Una figura per gruppo. Sopra: densita' (asse y log) dei soggetti e del gruppo con IC 95%,
-    gaussiana di fit, zone dove i dati deviano dalla gaussiana. Sotto: log10(dati / gaussiana).
+    gaussiana di fit del gruppo, zone dove i dati deviano dalla gaussiana, linee a ±1..5 SD.
+    In mezzo: log10(dati / gaussiana). Sotto: tabella % campioni oltre ±k SD (dati vs gaussiana).
     """
-    r = amplitude_deviation_from_gaussian(store, group, n_boot, seed)
+    r = amplitude_deviation_from_gaussian(store, group, n_boot, seed, sd_levels)
     if r is None:
         return None
     c, g = r["centers"], r["gauss"]
-    fig, (ax, ax2) = plt.subplots(2, 1, figsize=(8, 8), sharex=True,
-                                  gridspec_kw=dict(height_ratios=[3, 1.4]))
+    fig = plt.figure(figsize=(9, 11.5))
+    outer = fig.add_gridspec(2, 1, height_ratios=[4.4, 1.0], hspace=0.2)
+    inner = outer[0].subgridspec(2, 1, height_ratios=[3, 1.4], hspace=0.08)
+    ax = fig.add_subplot(inner[0])
+    ax2 = fig.add_subplot(inner[1], sharex=ax)
+    ax3 = fig.add_subplot(outer[1])
 
     def shade(a):
         for mask, col in ((r["heavier"], "tab:orange"), (r["lighter"], "tab:purple")):
             for i0, i1 in _runs(mask):
                 a.axvspan(c[i0] - (c[1] - c[0]) / 2, c[i1] + (c[1] - c[0]) / 2,
                           color=col, alpha=0.15, lw=0)
+        for k in sd_levels:
+            for sgn in (-1, 1):
+                a.axvline(sgn * k, color="0.4", ls=":", lw=1)
 
     shade(ax)
     for d in r["D"]:
@@ -373,17 +419,15 @@ def plot_amplitude_z_group(store, group, color, out_png, n_boot=2000, seed=0):
     ax.semilogy(c, np.where(r["density"] > 0, r["density"], np.nan), color=color, lw=3,
                 label=f"{_label(group)}, group mean (95% CI)")
     ax.semilogy(c, g, "k--", lw=2,
-                label=f"Gaussian fit (μ = {r['mu']:.2f}, σ = {r['sigma']:.2f})")
+                label=f"Gaussian fit to this group (μ = {r['mu']:.2f}, σ = {r['sigma']:.2f})")
     ax.plot([], [], color="tab:orange", lw=8, alpha=0.3, label="data above Gaussian")
     ax.plot([], [], color="tab:purple", lw=8, alpha=0.3, label="data below Gaussian")
-    ax.set(ylim=(1e-5, 1), ylabel="Density")
+    ax.set(ylim=(1e-5, 3), ylabel="Density")
     ax.set_title(f"Amplitude distribution: {_label(group)} (n = {r['n']})")
-    ax.legend(loc="upper left", fontsize=BASE_FONT - 3)
-    ax.text(0.98, 0.97,
-            f"excess kurtosis = {r['kurtosis']:.2f}\n"
-            f"|z| > 3: {100 * r['frac3']:.2f}% (Gaussian 0.27%)\n"
-            f"KS D = {r['ks']:.3f}",
+    ax.legend(loc="upper left", fontsize=BASE_FONT - 4)
+    ax.text(0.98, 0.97, f"excess kurtosis = {r['kurtosis']:.2f}\nKS D = {r['ks']:.3f}",
             transform=ax.transAxes, ha="right", va="top", fontsize=BASE_FONT - 3)
+    ax.tick_params(labelbottom=False)
 
     shade(ax2)
     ok = (r["density"] > 0) & (g > 0)
@@ -393,7 +437,26 @@ def plot_amplitude_z_group(store, group, color, out_png, n_boot=2000, seed=0):
     ax2.fill_between(c, rlo, rhi, color=color, alpha=0.3, lw=0)
     ax2.plot(c, ratio, color=color, lw=2.5)
     ax2.axhline(0, color="k", ls="--", lw=1.5)
-    ax2.set(xlabel="Amplitude (z-score per channel)", ylabel="log10(data / Gaussian)",
+    ticks = [-k for k in sd_levels[::-1]] + [0] + list(sd_levels)
+    ax2.set_xticks(ticks)
+    ax2.set(xlabel="Amplitude (SD units, z-scored per channel)", ylabel="log10(data / Gaussian)",
             xlim=(c[0], c[-1]))
+
+    ax3.axis("off")
+    rows = [["% beyond ±k SD"] + [f"±{t['sd']} SD" for t in r["tail"]],
+            ["data"] + [_fmt_pct(t["data_pct"]) for t in r["tail"]],
+            ["Gaussian fit"] + [_fmt_pct(t["gauss_pct"]) for t in r["tail"]],
+            ["data / Gaussian"] + [f"{t['ratio']:.3g}" if np.isfinite(t["ratio"]) else "n.a."
+                                   for t in r["tail"]]]
+    tb = ax3.table(cellText=rows, loc="center", cellLoc="center",
+                   colWidths=[0.3] + [0.7 / len(sd_levels)] * len(sd_levels))
+    tb.auto_set_font_size(False)
+    tb.set_fontsize(BASE_FONT - 3)
+    tb.scale(1, 1.8)
+    for (i, j), cell in tb.get_celld().items():
+        cell.set_linewidth(0.6)
+        if i == 0 or j == 0:
+            cell.set_text_props(fontweight="bold")
+    fig.align_ylabels([ax, ax2])
     _save(fig, out_png)
     return r

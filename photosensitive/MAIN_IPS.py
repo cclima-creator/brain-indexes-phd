@@ -59,7 +59,7 @@ def analyze_subject(epochs, group, sid):
     for k in range(n_ep):
         row = dict(group=group, subject=sid, epoch=k, label=labels[k], stim_freq=fstim[k])
         for h, s in snr_narrowband(psd[k], freqs, fstim[k], cfg.N_HARMONICS,
-                                   cfg.NB_GAP, cfg.NB_WIDTH).items():
+                                   cfg.NB_GAP, cfg.NB_WIDTH, cfg.FMAX_ANALYSIS).items():
             row[f"snr_h{h}_all_dB"] = np.nanmean(s)
             row[f"snr_h{h}_roi_dB"] = np.nanmean(s[roi])
         epoch_rows.append(row)
@@ -80,6 +80,27 @@ def analyze_subject(epochs, group, sid):
     store = dict(group=group, subject=sid, f=freqs, psd=psd_sub.mean(0),
                  heat=np.log10(psd[:, roi, :].mean(1)), fstim=fstim, amp=amp)
     return band_df, epoch_rows, summary, store
+
+
+def print_snr_summary(subj_meta):
+    """Console: SNR per soggetto, media ± SD per gruppo e test tra gruppi (FDR sulle misure di SNR)."""
+    cols = ["snr_broadband_dB"] + [c for c in subj_meta.columns
+                                    if c.startswith("snr_h") and c.endswith("_roi_dB")]
+    cols = [c for c in cols if subj_meta[c].notna().any()]
+    print("\n=== SNR per soggetto (dB) ===")
+    print("snr_broadband_dB: potenza media 1-45 Hz / potenza media 55-70 Hz (rumore), media sui canali")
+    print("snr_hK_roi_dB: SNR a banda stretta alla K-esima armonica dello stimolo (<= 45 Hz), canali ROI")
+    print(subj_meta[["group", "subject"] + cols].round(2).to_string(index=False))
+    print("\nMedia ± SD per gruppo:")
+    for g, d in subj_meta.groupby("group"):
+        print(f"  {g} (n={len(d)}): " + ", ".join(
+            f"{c} = {d[c].mean():.2f} ± {d[c].std():.2f}" for c in cols))
+    t = compare_groups(subj_meta, cols)
+    if len(t):
+        print("\nTest tra gruppi (p_fdr = FDR sulle misure di SNR qui sopra):")
+        print(t.round(4).to_string(index=False))
+    else:
+        print("\nTest tra gruppi non possibile (servono >= 2 soggetti per gruppo)")
 
 
 def main():
@@ -132,6 +153,7 @@ def main():
         "band_power_per_subject": subj,
         "band_power_per_channel": long,
     }
+    print_snr_summary(subj_meta)
     save_tables_excel(tables, out_dir / "risultati_eeg.xlsx", cfg.SHEET_ORDER)
     save_results(dict(store=store, long=long, subj=subj, snr_freq=snr_freq),
                  out_dir / "results.pkl")

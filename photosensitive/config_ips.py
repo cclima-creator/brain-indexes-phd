@@ -33,8 +33,9 @@ BANDS = {"delta": (1, 4), "theta": (4, 8), "alpha": (8, 13),
 BAND_TOTAL = (1.0, 45.0)    # range per la potenza totale (potenza relativa)
 FMIN, FMAX_PSD = 1.0, 70.0
 SEGMENT_S = None            # None = una PSD sull'intera epoca
-PSD_PLOT_FMAX = 45.0         # tutte le PSD nei grafici (singole e di gruppo) si fermano qui
-                             # FMAX_PSD resta 70 solo perche' l'SNR a banda larga usa 55-70 Hz come rumore
+FMAX_ANALYSIS = 45.0         # sopra i 45 Hz e' rumore: grafici e SNR a banda stretta si fermano qui
+PSD_PLOT_FMAX = FMAX_ANALYSIS
+                             # FMAX_PSD resta 70 SOLO perche' l'SNR a banda larga usa 55-70 Hz come stima del rumore
 COMMON_F = np.arange(FMIN, PSD_PLOT_FMAX + 1e-9, 0.1)
 
 # ---- SNR
