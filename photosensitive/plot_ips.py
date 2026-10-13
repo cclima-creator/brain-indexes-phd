@@ -5,7 +5,7 @@ Created on Wed Oct  7 16:14:26 2026
 @author: Chiara Clima
 """
 
-"""Grafici database IPS: legge results.pkl prodotto da MAIN_IPS.py (nessun ricalcolo)."""
+"""Grafici database IPS: legge results.pkl prodotto da MAIN_IPS.py (nessun ricalcolo dell'analisi)."""
 import sys
 from pathlib import Path
 
@@ -17,7 +17,8 @@ if str(ROOT) not in sys.path:
 from photosensitive import config_ips as cfg
 from photosensitive.report import FALLBACK_DIR, load_results
 from descriptive_analysis import plots
-from descriptive_analysis.plots import _rgba, _save, _need_plotly, HAVE_PLOTLY
+from descriptive_analysis.plots import (_rgba, _save, _need_plotly, _label, HAVE_PLOTLY,
+                                        PLOTLY_FONT)
 
 import numpy as np
 import matplotlib.pyplot as plt
@@ -27,12 +28,12 @@ if HAVE_PLOTLY:
 
 
 # ------------------------------------------------------------------ SNR
-SNR_COLS = (("snr_h1_roi_dB", "Fondamentale (f)"), ("snr_h2_roi_dB", "Seconda armonica (2f)"))
+SNR_COLS = (("snr_h1_roi_dB", "Fundamental (f)"), ("snr_h2_roi_dB", "Second harmonic (2f)"))
 
 
 def plot_snr_vs_stim_freq(snr_freq, colors, out_png, out_html=None, cols=SNR_COLS):
     """snr_freq: DataFrame con group, subject, stim_freq e le colonne SNR (media per frequenza)."""
-    fig, axes = plt.subplots(1, len(cols), figsize=(6.5 * len(cols), 4.8), sharey=True,
+    fig, axes = plt.subplots(1, len(cols), figsize=(7 * len(cols), 5.5), sharey=True,
                              squeeze=False)
     for ax, (col, ttl) in zip(axes[0], cols):
         for g, c in colors.items():
@@ -41,17 +42,17 @@ def plot_snr_vs_stim_freq(snr_freq, colors, out_png, out_html=None, cols=SNR_COL
             if piv.empty:
                 continue
             for _, r in piv.iterrows():
-                ax.plot(piv.columns, r.values, color=c, lw=0.6, alpha=0.3)
+                ax.plot(piv.columns, r.values, color=c, lw=0.7, alpha=0.3)
             n = piv.count()
             sem = piv.std(ddof=1) / np.sqrt(n)
             ok = (n >= 2).values
-            ax.errorbar(piv.columns[ok], piv.mean()[ok], yerr=sem[ok], color=c, lw=2,
-                        marker="o", ms=3, capsize=2, label=f"{g} (n={piv.shape[0]})")
-        ax.axhline(0, color="k", lw=0.5, ls="--")
-        ax.set(title=ttl, xlabel="Frequenza di stimolazione (Hz)")
-    axes[0][0].set_ylabel("SNR ROI (dB)")
+            ax.errorbar(piv.columns[ok], piv.mean()[ok], yerr=sem[ok], color=c, lw=2.5,
+                        marker="o", ms=5, capsize=3, label=f"{_label(g)} (n = {piv.shape[0]})")
+        ax.axhline(0, color="k", lw=1, ls="--")
+        ax.set(title=ttl, xlabel="Stimulation frequency (Hz)")
+    axes[0][0].set_ylabel("SNR, ROI (dB)")
     axes[0][0].legend()
-    fig.suptitle("SNR a banda stretta: potenza al bin di stimolo / media dei bin vicini")
+    fig.suptitle("Narrow-band SNR: power at stimulation bin / mean of neighbouring bins")
     _save(fig, out_png)
 
     if out_html and _need_plotly():
@@ -65,16 +66,16 @@ def plot_snr_vs_stim_freq(snr_freq, colors, out_png, out_html=None, cols=SNR_COL
                     legendgroup=sid, showlegend=(j == 1), marker=dict(size=5),
                     line=dict(color=_rgba(colors[g], 0.45), width=1.3),
                     hovertemplate="stim %{x:g} Hz<br>SNR %{y:.1f} dB<extra>"
-                                  + sid + " | " + g + "</extra>"), row=1, col=j)
+                                  + sid + " | " + _label(g) + "</extra>"), row=1, col=j)
             for g, c in colors.items():
                 mm = snr_freq[snr_freq.group == g].groupby("stim_freq")[col].mean()
                 fs.add_trace(go.Scatter(
-                    x=mm.index, y=mm.values, mode="lines+markers", name=f"MEDIA {g}",
-                    legendgroup=f"MEDIA {g}", showlegend=(j == 1),
+                    x=mm.index, y=mm.values, mode="lines+markers", name=f"MEAN {_label(g)}",
+                    legendgroup=f"MEAN {g}", showlegend=(j == 1),
                     line=dict(color=_rgba(c, 1), width=4), marker=dict(size=7)), row=1, col=j)
-        fs.update_layout(template="plotly_white", hovermode="closest",
-                         title="SNR ROI alla frequenza di stimolazione (click in legenda = nascondi/mostra)")
-        fs.update_xaxes(title_text="Frequenza di stimolazione (Hz)")
+        fs.update_layout(template="simple_white", hovermode="closest", font=PLOTLY_FONT,
+                         title="ROI SNR at the stimulation frequency (click legend to hide/show)")
+        fs.update_xaxes(title_text="Stimulation frequency (Hz)")
         fs.update_yaxes(title_text="SNR (dB)", row=1, col=1)
         fs.write_html(out_html, include_plotlyjs=True)
 
@@ -91,19 +92,27 @@ def main():
     res = load_results(out / "results.pkl")
     store, long, subj, snr_freq = res["store"], res["long"], res["subj"], res["snr_freq"]
     colors = cfg.COLORS
+    fmax = cfg.PSD_PLOT_FMAX
+    plots.paper_style()
 
     plots.plot_psd_all_subjects(store, colors, out / "fig1_psd_all_subjects.png",
-                                out / "fig1_psd_all_subjects_interactive.html", cfg.COMMON_F)
-    plots.plot_psd_each_subject(store, colors, out / "fig2_psd_each_subject.png")
-    plots.plot_epoch_maps(store, colors, out / "fig3_epoch_maps.png")
+                                out / "fig1_psd_all_subjects_interactive.html",
+                                cfg.COMMON_F, fmax)
+    plots.plot_psd_each_subject(store, colors, out / "fig2_psd_each_subject.png", fmax)
+    plots.plot_epoch_maps(store, colors, out / "fig3_epoch_maps.png", fmax)
     plot_snr_vs_stim_freq(snr_freq, colors, out / "fig4_snr_vs_stim_freq.png",
                           out / "fig4_snr_vs_stim_freq_interactive.html")
-    plots.plot_band_hist_gauss(long, cfg.BANDS, colors, out / "fig5_hist_gauss_bands.png")
-    plots.plot_relative_power_boxplot(subj, cfg.BANDS, colors,
-                                      out / "fig6_relative_power_boxplot.png")
-    plots.plot_amplitude_hist_subjects(store, colors, out / "fig7_amplitude_hist_subjects.png")
-    plots.plot_amplitude_z_overlay(store, colors, out / "fig8_amplitude_zscore_overlay.png")
-    print("Grafici salvati in:", out)
+    t5 = plots.plot_band_hist_gauss(long, subj, cfg.BANDS, colors,
+                                    out / "fig5_hist_gauss_bands.png")
+    t6 = plots.plot_relative_power_boxplot(subj, cfg.BANDS, colors,
+                                           out / "fig6_relative_power_boxplot.png")
+    for name, t in (("fig5 log10 potenza", t5), ("fig6 potenza relativa", t6)):
+        if len(t):
+            print(f"\nTest tra gruppi, {name}:")
+            print(t[["test", "p", "p_fdr"]].round(4).to_string())
+    for g, c in colors.items():
+        plots.plot_amplitude_z_group(store, g, c, out / f"fig8_amplitude_zscore_{g}.png")
+    print("\nGrafici salvati in:", out)
 
 
 if __name__ == "__main__":

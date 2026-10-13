@@ -33,7 +33,9 @@ BANDS = {"delta": (1, 4), "theta": (4, 8), "alpha": (8, 13),
 BAND_TOTAL = (1.0, 45.0)    # range per la potenza totale (potenza relativa)
 FMIN, FMAX_PSD = 1.0, 70.0
 SEGMENT_S = None            # None = una PSD sull'intera epoca
-COMMON_F = np.arange(FMIN, FMAX_PSD, 0.1)
+PSD_PLOT_FMAX = 45.0         # tutte le PSD nei grafici (singole e di gruppo) si fermano qui
+                             # FMAX_PSD resta 70 solo perche' l'SNR a banda larga usa 55-70 Hz come rumore
+COMMON_F = np.arange(FMIN, PSD_PLOT_FMAX + 1e-9, 0.1)
 
 # ---- SNR
 SNR_SIGNAL = (1.0, 45.0)    # SNR a banda larga: range di segnale
@@ -61,7 +63,7 @@ OUTPUT_NAMES = [
     "fig2_psd_each_subject.png", "fig3_epoch_maps.png",
     "fig4_snr_vs_stim_freq.png", "fig4_snr_vs_stim_freq_interactive.html",
     "fig5_hist_gauss_bands.png", "fig6_relative_power_boxplot.png",
-    "fig7_amplitude_hist_subjects.png", "fig8_amplitude_zscore_overlay.png",
+    *[f"fig8_amplitude_zscore_{g}.png" for g in GROUPS],
     "risultati_eeg.xlsx", "results.pkl",
 ]
 SHEET_ORDER = ["group_summary_bands", "group_tests", "subject_level_metrics",
