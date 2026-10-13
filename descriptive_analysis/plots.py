@@ -10,6 +10,8 @@ Tutti i grafici. Ogni funzione riceve dati e percorsi.
 Stile da articolo (paper_style) e tutte le scritte nelle figure in inglese.
 Unici calcoli qui: test tra gruppi da annotare sulle figure e IC bootstrap della fig. 8.
 """
+from pathlib import Path
+
 import numpy as np
 import matplotlib
 matplotlib.use("Agg")
@@ -82,9 +84,24 @@ def _grid(n, ncols=5, h=3.2, w=4.0):
 
 
 def _save(fig, path):
+    """Salva la figura. Se il file vecchio e' bloccato (aperto in un visualizzatore, OneDrive...)
+    prova a cancellarlo; se non si puo', salva con suffisso _new e avvisa invece di fermarsi."""
     fig.tight_layout()
-    fig.savefig(path, dpi=300, bbox_inches="tight")
-    plt.close(fig)
+    path = Path(path)
+    try:
+        try:
+            fig.savefig(path, dpi=300, bbox_inches="tight")
+        except OSError:
+            try:
+                path.unlink(missing_ok=True)
+                fig.savefig(path, dpi=300, bbox_inches="tight")
+            except OSError as e:
+                alt = path.with_name(path.stem + "_new" + path.suffix)
+                print(f"ATTENZIONE: non riesco a scrivere {path.name} ({e}).\n"
+                      f"  Il file e' aperto in un altro programma o bloccato da OneDrive? Salvo come {alt.name}")
+                fig.savefig(alt, dpi=300, bbox_inches="tight")
+    finally:
+        plt.close(fig)
 
 
 def _need_plotly():
