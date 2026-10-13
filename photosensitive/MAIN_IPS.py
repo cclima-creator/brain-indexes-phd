@@ -1,0 +1,142 @@
+# -*- coding: utf-8 -*-
+"""
+Created on Wed Oct  7 16:13:54 2026
+
+@author: Chiara Clima
+"""
+
+"""
+MAIN database IPS: importa i dati, calcola le feature con i moduli, salva Excel + risultati.
+I grafici si fanno dopo con plot_ips.py (senza rifare l'analisi).
+"""
+import sys
+import warnings
+from pathlib import Path
+
+import numpy as np
+import pandas as pd
+
+# cartella principale del repository (brain-indexes-phd/) nel path, cosi' si possono
+# importare sia photosensitive/ che descriptive_analysis/ lanciando questo file direttamente
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from photosensitive import config_ips as cfg
+from photosensitive.io_eeg import discover_files, load_epochs, epoch_labels, get_data_uv   ##io_eeg to load data
+from photosensitive.report import check_output_dir, save_tables_excel, save_results
+from descriptive_analysis.spectral import compute_psd, band_power_table
+from descriptive_analysis.snr import snr_broadband, snr_narrowband
+from descriptive_analysis.amplitude import amplitude_distribution
+from descriptive_analysis.summary_stats import band_group_summary, compare_groups
+
+warnings.filterwarnings("ignore")
+
+
+def analyze_subject(epochs, group, sid):
+    """Tutte le feature di un soggetto. Usa solo get_data/info/ch_names/events/event_id."""
+    sf = epochs.info["sfreq"]
+    names = epochs.ch_names
+    data = get_data_uv(epochs)                        # (n_ep, n_ch, n_t) uV
+    n_ep, n_ch, n_t = data.shape
+
+    freqs, psd = compute_psd(data, sf, cfg.FMIN, cfg.FMAX_PSD, cfg.SEGMENT_S)
+    psd_sub = psd.mean(0)                             # (n_ch, n_f) media sulle epoche
+
+    labels = epoch_labels(epochs)
+    fstim = np.array([cfg.STIM_FREQ_MAP.get(l, cfg.parse_stim_freq(l)) for l in labels],
+                     dtype=float)
+    print(f"    etichette: {sorted(set(labels))[:6]}{' ...' if len(set(labels)) > 6 else ''}")
+
+    roi_up = {c.upper() for c in cfg.ROI_CHANNELS}
+    roi = [i for i, c in enumerate(names) if c.upper() in roi_up]
+    if not roi:
+        print("    ATTENZIONE: nessun canale ROI trovato, uso tutti i canali")
+        roi = list(range(n_ch))
+
+    # SNR a banda stretta per epoca
+    epoch_rows = []
+    for k in range(n_ep):
+        row = dict(group=group, subject=sid, epoch=k, label=labels[k], stim_freq=fstim[k])
+        for h, s in snr_narrowband(psd[k], freqs, fstim[k], cfg.N_HARMONICS,
+                                   cfg.NB_GAP, cfg.NB_WIDTH).items():
+            row[f"snr_h{h}_all_dB"] = np.nanmean(s)
+            row[f"snr_h{h}_roi_dB"] = np.nanmean(s[roi])
+        epoch_rows.append(row)
+
+    # potenza per banda
+    band_df = band_power_table(psd_sub, freqs, names, cfg.BANDS, cfg.BAND_TOTAL)
+    band_df.insert(0, "subject", sid)
+    band_df.insert(0, "group", group)
+
+    # ampiezze nel tempo
+    amp = amplitude_distribution(data)
+
+    summary = dict(group=group, subject=sid, sfreq=sf, n_channels=n_ch, n_epochs=n_ep,
+                   n_roi_channels=len(roi), epoch_len_s=n_t / sf,
+                   snr_broadband_dB=np.nanmean(
+                       snr_broadband(psd_sub, freqs, cfg.SNR_SIGNAL, cfg.SNR_NOISE)),
+                   **amp["stats"])
+    store = dict(group=group, subject=sid, f=freqs, psd=psd_sub.mean(0),
+                 heat=np.log10(psd[:, roi, :].mean(1)), fstim=fstim, amp=amp)
+    return band_df, epoch_rows, summary, store
+
+
+def main():
+    out_dir = check_output_dir(cfg.OUT_DIR, cfg.OUTPUT_NAMES)
+    print("Cartella di output:", out_dir)
+
+    band_dfs, epoch_rows, subj_rows, store = [], [], [], []
+    for group, folder in cfg.GROUPS.items():
+        files = discover_files(folder)
+        print(f"{group}: {len(files)} file")
+        for fpath in files:
+            print("  ", fpath.name)
+            try:
+                ep = load_epochs(fpath, cfg.FIXED_LENGTH_S, cfg.ANALYSIS_WINDOW)
+                bd, er, sm, st = analyze_subject(ep, group, fpath.stem)
+                band_dfs.append(bd); epoch_rows += er; subj_rows.append(sm); store.append(st)
+            except Exception as e:
+                print("    ERRORE ->", e)
+    if not store:
+        raise SystemExit("Nessun file analizzato: controlla i percorsi in config_ips.py")
+
+    long = pd.concat(band_dfs, ignore_index=True)
+    epoch_df = pd.DataFrame(epoch_rows)
+    subj_meta = pd.DataFrame(subj_rows)
+    snr_cols = [c for c in epoch_df.columns if c.startswith("snr_")]
+
+    subj_meta = subj_meta.merge(
+        epoch_df.groupby(["group", "subject"])[snr_cols].mean().reset_index(),
+        on=["group", "subject"], how="left")
+    snr_freq = epoch_df.groupby(["group", "subject", "stim_freq"])[snr_cols].mean().reset_index()
+    snr_freq_group = snr_freq.groupby(["group", "stim_freq"])[snr_cols].agg(
+        ["mean", "median", "count"])
+    snr_freq_group.columns = ["_".join(c) for c in snr_freq_group.columns]
+
+    subj = (long.groupby(["group", "subject", "band"])[["abs_uV2", "rel", "log10_abs"]]
+            .mean().reset_index())
+    wide = subj.pivot(index=["group", "subject"], columns="band", values=["log10_abs", "rel"])
+    wide.columns = [f"{m}_{b}" for m, b in wide.columns]
+    wide = wide.reset_index().merge(subj_meta, on=["group", "subject"])
+    metrics = [c for c in wide.columns if c.startswith(("log10_abs_", "rel_"))] + \
+              ["snr_broadband_dB", "rms_uV", "std_uV", "skew", "excess_kurtosis",
+               "frac_beyond_3sd", "ks_D_vs_gauss"] + snr_cols
+
+    tables = {
+        "group_summary_bands": band_group_summary(long, subj),
+        "group_tests": compare_groups(wide, metrics),
+        "subject_level_metrics": subj_meta,
+        "snr_by_stim_freq_group": snr_freq_group.reset_index(),
+        "epoch_table_snr": epoch_df,
+        "band_power_per_subject": subj,
+        "band_power_per_channel": long,
+    }
+    save_tables_excel(tables, out_dir / "risultati_eeg.xlsx", cfg.SHEET_ORDER)
+    save_results(dict(store=store, long=long, subj=subj, snr_freq=snr_freq),
+                 out_dir / "results.pkl")
+    print("\nFatto. Excel e results.pkl in:", out_dir)
+
+
+if __name__ == "__main__":
+    main()
