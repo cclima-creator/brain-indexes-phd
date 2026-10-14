@@ -460,3 +460,146 @@ def plot_amplitude_z_group(store, group, color, out_png, n_boot=2000, seed=0,
     fig.align_ylabels([ax, ax2])
     _save(fig, out_png)
     return r
+
+
+# ------------------------------------------------------------------ MISURE PER SOGGETTO
+def _box_by_group(ax, subj_meta, col, colors, ylabel, seed=0, group_col="group"):
+    """Box per gruppo + soggetti come punti + test tra gruppi nel titolo. Ritorna la riga del test."""
+    rng = np.random.default_rng(seed)
+    groups = [g for g in colors if g in set(subj_meta[group_col])]
+    data = [subj_meta.loc[subj_meta[group_col] == g, col].replace([np.inf, -np.inf], np.nan)
+            .dropna().values for g in groups]
+    bp = ax.boxplot(data, positions=range(len(groups)), widths=0.55, patch_artist=True,
+                    showfliers=False, medianprops=dict(color="k", lw=2))
+    for patch, g in zip(bp["boxes"], groups):
+        patch.set_facecolor(colors[g])
+        patch.set_alpha(0.45)
+    for i, (g, d) in enumerate(zip(groups, data)):
+        ax.scatter(i + rng.uniform(-0.12, 0.12, len(d)), d, s=26, color=colors[g],
+                   edgecolor="k", linewidth=0.5, zorder=3)
+    ax.set_xticks(range(len(groups)))
+    ax.set_xticklabels([_label(g).replace(" ", "\n", 1) for g in groups])
+    ax.set_ylabel(ylabel)
+    t = compare_groups(subj_meta, [col], group_col)
+    if len(t):
+        ax.set_title(f"{_p_str(t['p'].iloc[0])} {_stars(t['p'].iloc[0])}", fontsize=BASE_FONT)
+        return t.iloc[0]
+    return None
+
+
+def plot_epoch_counts(counts, colors, out_png):
+    """
+    fig9. Sinistra: epoche disponibili per soggetto, per gruppo (box + punti, test tra gruppi).
+    Destra: epoche medie per soggetto a ogni frequenza di stimolo, per gruppo (± SD).
+    counts: tabella per soggetto di summary_stats.epoch_counts.
+    """
+    fig, axes = plt.subplots(1, 2, figsize=(13, 5.2), gridspec_kw=dict(width_ratios=[1, 2.4]))
+    _box_by_group(axes[0], counts, "n_epochs", colors, "Epochs per subject")
+    ax = axes[1]
+    fcols = [c for c in counts.columns if c.startswith("n_") and c.endswith("Hz")]
+    x = np.arange(len(fcols))
+    groups = [g for g in colors if g in set(counts.group)]
+    w = 0.8 / max(len(groups), 1)
+    for k, g in enumerate(groups):
+        d = counts[counts.group == g][fcols]
+        ax.bar(x + (k - (len(groups) - 1) / 2) * w, d.mean(), w * 0.9, yerr=d.std(ddof=1),
+               color=colors[g], alpha=0.7, capsize=2, label=_label(g))
+    ax.set_xticks(x)
+    ax.set_xticklabels([c[2:-2] for c in fcols], rotation=0 if len(fcols) < 14 else 90)
+    ax.set(xlabel="Stimulation frequency (Hz)", ylabel="Epochs per subject (mean ± SD)",
+           title="Available epochs per stimulation frequency")
+    ax.legend()
+    fig.suptitle("Number of available epochs")
+    _save(fig, out_png)
+
+
+def plot_stationarity(subj_meta, ec, colors, out_png, alpha=0.05):
+    """
+    fig10. Sinistra: frazione di epoche x canali non stazionarie per soggetto (Reverse Arrangement
+    Test, p < alpha); la linea tratteggiata e' alpha, la frazione attesa per puro caso.
+    Destra: distribuzione cumulativa dei p del test per gruppo; se tutto e' stazionario i p sono
+    uniformi e la curva segue la diagonale; una curva sopra la diagonale a p piccoli = non stazionarieta'.
+    """
+    fig, axes = plt.subplots(1, 2, figsize=(12, 5.2))
+    _box_by_group(axes[0], subj_meta, "frac_nonstationary", colors,
+                  f"Fraction non-stationary (p < {alpha})")
+    axes[0].axhline(alpha, color="k", ls="--", lw=1.2)
+    axes[0].text(0.98, alpha, " chance level", transform=axes[0].get_yaxis_transform(),
+                 ha="right", va="bottom", fontsize=BASE_FONT - 3)
+    ax = axes[1]
+    for g, c in colors.items():
+        v = np.sort(ec.loc[ec.group == g, "stat_p"].dropna().values)
+        if len(v):
+            ax.step(v, np.arange(1, len(v) + 1) / len(v), where="post", lw=2.5, color=c,
+                    label=_label(g))
+    ax.plot([0, 1], [0, 1], color="k", ls="--", lw=1.2, label="all stationary (uniform p)")
+    ax.axvline(alpha, color="0.6", ls=":", lw=1.2)
+    ax.set(xlabel="Reverse Arrangement Test p (epoch × channel)", ylabel="Cumulative probability",
+           title="p-value distribution", xlim=(0, 1), ylim=(0, 1.02))
+    ax.legend(fontsize=BASE_FONT - 3)
+    fig.suptitle("Stationarity of epochs (variance trend within each epoch)")
+    _save(fig, out_png)
+
+
+def _cdf(ax, ec, col, colors, ks, xlabel):
+    for g, c in colors.items():
+        v = np.sort(ec.loc[ec.group == g, col].replace([np.inf, -np.inf], np.nan).dropna().values)
+        if len(v):
+            ax.plot(v, np.arange(1, len(v) + 1) / len(v), color=c, lw=2.5, label=_label(g))
+    ax.set(xlabel=xlabel, ylabel="Cumulative probability", ylim=(0, 1.02))
+    if ks:
+        ax.set_title(f"KS D = {ks['D']:.3f}, permutation {_p_str(ks['p_perm'])}",
+                     fontsize=BASE_FONT)
+    ax.legend(loc="lower right", fontsize=BASE_FONT - 3)
+
+
+def plot_variance_acfw(subj_meta, ec, ks_tests, colors, out_png):
+    """
+    fig11. Sopra: log10 varianza e ACFW per soggetto (box, Mann-Whitney).
+    Sotto: CDF di tutte le epoche x canali per gruppo, con KS a permutazione sui soggetti.
+    ks_tests: dict metrica -> risultato di summary_stats.ks_permutation_test.
+    """
+    fig, axes = plt.subplots(2, 2, figsize=(12, 10))
+    _box_by_group(axes[0][0], subj_meta, "log10_var", colors, "log10 variance (µV²)")
+    _box_by_group(axes[0][1], subj_meta, "acfw_ms", colors, "ACF width (ms)")
+    _cdf(axes[1][0], ec, "log10_var", colors, ks_tests.get("log10_var"),
+         "log10 variance (µV²), epoch × channel")
+    _cdf(axes[1][1], ec, "acfw_ms", colors, ks_tests.get("acfw_ms"), "ACF width (ms), epoch × channel")
+    lo, hi = np.nanpercentile(ec["acfw_ms"], [0.5, 99.5]) if ec["acfw_ms"].notna().any() else (0, 1)
+    axes[1][1].set_xlim(lo, hi)
+    fig.suptitle("Signal variance and autocorrelation function width (ACFW)")
+    fig.text(0.5, -0.01, "Top: one value per subject (mean over epochs and channels), Mann–Whitney U. "
+             "Bottom: all epochs × channels; p from permuting group labels across subjects.",
+             ha="center", fontsize=BASE_FONT - 3)
+    _save(fig, out_png)
+
+
+def plot_aperiodic(store, subj_meta, colors, out_png, frange=(2.0, 40.0)):
+    """
+    fig12. Sinistra: PSD media di gruppo (log-log) con la retta aperiodica media del gruppo
+    (offset - exponent * log10 f) nel range del fit. Centro e destra: esponente e offset
+    per soggetto (media sui canali), con test tra gruppi.
+    """
+    fig, axes = plt.subplots(1, 3, figsize=(17, 5.4), gridspec_kw=dict(width_ratios=[1.6, 1, 1]))
+    ax = axes[0]
+    for g, c in colors.items():
+        items = [s for s in store if s["group"] == g and "aperiodic" in s]
+        if not items:
+            continue
+        f = items[0]["f"]
+        m = (f >= 1) & (f <= 45)
+        P = np.array([np.interp(f[m], s["f"], s["psd"]) for s in items])
+        ax.loglog(f[m], P.mean(0), color=c, lw=2, label=f"{_label(g)} PSD")
+        expo = np.mean([np.nanmean(s["aperiodic"]["exponent"]) for s in items])
+        off = np.mean([np.nanmean(s["aperiodic"]["offset"]) for s in items])
+        fr = np.linspace(frange[0], frange[1], 100)
+        ax.loglog(fr, 10 ** (off - expo * np.log10(fr)), color=c, ls="--", lw=2.5,
+                  label=f"aperiodic fit, exponent = {expo:.2f}")
+    ax.axvspan(frange[0], frange[1], color="0.9", zorder=0, lw=0)
+    ax.set(xlabel="Frequency (Hz)", ylabel="PSD (µV²/Hz)",
+           title=f"Group mean PSD and 1/f fit ({frange[0]:g}–{frange[1]:g} Hz)")
+    ax.legend(fontsize=BASE_FONT - 3)
+    _box_by_group(axes[1], subj_meta, "aperiodic_exponent", colors, "Aperiodic exponent")
+    _box_by_group(axes[2], subj_meta, "aperiodic_offset", colors, "Aperiodic offset (log10 µV²/Hz)")
+    fig.suptitle("Aperiodic (1/f) component of the spectrum")
+    _save(fig, out_png)

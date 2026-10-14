@@ -16,7 +16,7 @@ if str(ROOT) not in sys.path:
 
 from photosensitive import config_ips as cfg
 from photosensitive.report import FALLBACK_DIR, load_results
-from descriptive_analysis import plots
+from descriptive_analysis import plots, topography
 from descriptive_analysis.plots import (_rgba, _save, _need_plotly, _label, HAVE_PLOTLY,
                                         PLOTLY_FONT)
 
@@ -122,6 +122,22 @@ def main():
             for t in r["tail"]:
                 print(f"  oltre ±{t['sd']} SD: dati {t['data_pct']:.4g}%  gaussiana {t['gauss_pct']:.4g}%"
                       f"  rapporto {t['ratio']:.3g}")
+    # ---- nuove figure: servono i risultati di un MAIN_IPS.py recente
+    if "ec" not in res:
+        print("\nresults.pkl e' di una versione vecchia: rilancia MAIN_IPS.py per le figure 9-14")
+    else:
+        sm, ec, chan = res["subj_meta"], res["ec"], res["chan"]
+        plots.plot_epoch_counts(res["counts"], colors, out / "fig9_epoch_counts.png")
+        plots.plot_stationarity(sm, ec, colors, out / "fig10_stationarity.png", cfg.STAT_ALPHA)
+        plots.plot_variance_acfw(sm, ec, res["ks"], colors, out / "fig11_variance_acfw.png")
+        plots.plot_aperiodic(store, sm, colors, out / "fig12_aperiodic.png", cfg.APERIODIC_RANGE)
+        topography.plot_group_topomaps(
+            chan, [(f"log10_abs_{b}", f"{b}\nlog10 power (µV²)") for b in cfg.BANDS], colors,
+            out / "fig13_topo_band_power.png", "Band power topography")
+        topography.plot_group_topomaps(
+            chan, [("log10_var", "log10 variance\n(µV²)"), ("acfw_ms", "ACF width\n(ms)"),
+                   ("aperiodic_exponent", "aperiodic\nexponent")], colors,
+            out / "fig14_topo_signal.png", "Variance, ACF width and 1/f exponent topography")
     print("\nGrafici salvati in:", out)
 
 

@@ -13,9 +13,13 @@ import numpy as np
 
 # cartella principale del repository (brain-indexes-phd/) nel path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from descriptive_analysis.spectral import compute_psd, band_power_table
+import pandas as pd
+
+from descriptive_analysis.spectral import compute_psd, band_power_table, aperiodic_fit
 from descriptive_analysis.snr import snr_at_frequency, snr_broadband
 from descriptive_analysis.amplitude import amplitude_distribution
+from descriptive_analysis.summary_stats import (acf_width, stationarity_test, epoch_counts,
+                                                ks_permutation_test)
 
 SF, T = 500, 11
 
@@ -61,6 +65,56 @@ def test_amplitude_detects_heavy_tails():
 def test_broadband_snr_nan_if_noise_range_outside_spectrum():
     freqs, psd = compute_psd(_signal(amp=0, noise=5), SF)
     assert np.isnan(snr_broadband(psd.mean(0), freqs, (1, 30), (400, 450))).all()
+
+
+def test_acf_width_of_sinusoid():
+    # ACF di una sinusoide a f Hz = cos(2*pi*f*lag): scende a 0.5 a lag = 1/(6f), FWHM = 1/(3f)
+    t = np.arange(0, T, 1 / SF)
+    x = np.sin(2 * np.pi * 5.0 * t)[None, None, :]
+    assert abs(acf_width(x, SF)[0, 0] - 1000 / 15) < 3          # 66.7 ms
+
+
+def test_acf_width_white_noise_is_short():
+    x = np.random.default_rng(4).normal(size=(2, 2, SF * T))
+    assert np.nanmax(acf_width(x, SF)) < 2 * 1000 / SF           # meno di 2 campioni
+
+
+def test_stationarity_white_noise_vs_trend():
+    rng = np.random.default_rng(5)
+    noise = rng.normal(size=(40, 3, SF * T))
+    trend = noise * np.linspace(1, 4, SF * T)                      # ampiezza che cresce
+    assert (stationarity_test(noise) < 0.05).mean() < 0.12
+    assert (stationarity_test(trend) < 0.05).mean() > 0.9
+
+
+def test_aperiodic_exponent_recovered_with_alpha_peak():
+    f = np.arange(1, 70, 0.1)
+    psd = 10 ** (1.0 - 1.5 * np.log10(f)) * (1 + 8 * np.exp(-(f - 10) ** 2 / 2))
+    r = aperiodic_fit(psd[None], f, (2, 40))
+    assert abs(r["exponent"][0] - 1.5) < 0.1
+
+
+def test_epoch_counts():
+    ep = pd.DataFrame(dict(group=["a"] * 5 + ["b"] * 3, subject=["s1"] * 3 + ["s2"] * 2 + ["s3"] * 3,
+                           epoch=range(8), stim_freq=[10, 10, 20, 10, np.nan, 20, 20, 20]))
+    per_subj, per_group = epoch_counts(ep)
+    assert per_subj.set_index("subject")["n_epochs"].to_dict() == {"s1": 3, "s2": 2, "s3": 3}
+    assert per_subj.set_index("subject").loc["s2", "n_no_stim"] == 1
+    assert per_group.set_index("group").loc["a", "total"] == 5
+
+
+def test_ks_permutation_same_vs_different():
+    rng = np.random.default_rng(6)
+    rows = []
+    for k in range(12):
+        g = "a" if k < 6 else "b"
+        for shift, name in ((0, "same"), (1.0 if g == "a" else 0, "diff")):
+            rows += [dict(subject=f"s{k}", group=g, metric=name, v=v)
+                     for v in rng.normal(shift, 1, 200)]
+    df = pd.DataFrame(rows)
+    same = ks_permutation_test(df[df.metric == "same"], "v", n_perm=999)
+    diff = ks_permutation_test(df[df.metric == "diff"], "v", n_perm=999)
+    assert same["p_perm"] > 0.05 and diff["p_perm"] < 0.01
 
 
 if __name__ == "__main__":

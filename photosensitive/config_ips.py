@@ -45,6 +45,13 @@ NB_GAP, NB_WIDTH = 0.3, 1.5 # SNR a banda stretta: bin vicini da 0.3 a 1.5 Hz
 N_HARMONICS = 3
 ROI_CHANNELS = ["Fp1", "AF7", "Fp2", "F7", "F3", "Fz", "F4", "F8", "T3", "C3", "Cz", "C4", "T4", "T5", "O1", "AF8", "O2", "T6", "P3", "P4", "Pz"]
 
+# ---- varianza, ACFW, stazionarieta', 1/f, CDF
+STAT_N_SEGMENTS = 20        # stazionarieta': ogni epoca divisa in 20 segmenti (Reverse Arrangement Test)
+STAT_ALPHA = 0.05           # p sotto cui un'epoca/canale e' considerata non stazionaria
+ACF_MAX_LAG_S = 1.0         # ACFW: lag massimo cercato (s); oltre -> NaN
+APERIODIC_RANGE = (2.0, 40.0)  # range del fit 1/f (Hz)
+KS_N_PERM = 5000            # permutazioni del test KS sulle CDF
+
 # ---- etichette eventi -> frequenza di stimolo
 STIM_FREQ_MAP = {}          # es. {"S 11": 10.0}: ha la precedenza sul parsing automatico
 
@@ -65,8 +72,11 @@ OUTPUT_NAMES = [
     "fig4_snr_vs_stim_freq.png", "fig4_snr_vs_stim_freq_interactive.html",
     "fig5_hist_gauss_bands.png", "fig6_relative_power_boxplot.png",
     *[f"fig8_amplitude_zscore_{g}.png" for g in GROUPS],
+    "fig9_epoch_counts.png", "fig10_stationarity.png", "fig11_variance_acfw.png",
+    "fig12_aperiodic.png", "fig13_topo_band_power.png", "fig14_topo_signal.png",
     "risultati_eeg.xlsx", "results.pkl",
 ]
 SHEET_ORDER = ["group_summary_bands", "group_tests", "subject_level_metrics",
+               "epoch_counts_group", "epoch_counts", "ks_permutation_tests", "channel_tests",
                "snr_by_stim_freq_group", "epoch_table_snr", "band_power_per_subject",
-               "band_power_per_channel"]
+               "band_power_per_channel", "signal_per_channel", "signal_per_epoch_channel"]
