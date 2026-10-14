@@ -49,7 +49,11 @@ ROI_CHANNELS = ["Fp1", "AF7", "Fp2", "F7", "F3", "Fz", "F4", "F8", "T3", "C3", "
 STAT_N_SEGMENTS = 20        # stazionarieta': ogni epoca divisa in 20 segmenti (Reverse Arrangement Test)
 STAT_ALPHA = 0.05           # p sotto cui un'epoca/canale e' considerata non stazionaria
 ACF_MAX_LAG_S = 1.0         # ACFW: lag massimo cercato (s); oltre -> NaN
-APERIODIC_RANGE = (2.0, 40.0)  # range del fit 1/f (Hz)
+APERIODIC_RANGE = (2.0, 40.0)  # range del fit FOOOF (Hz)
+APERIODIC_MODE = "knee"      # FOOOF: "knee" (fondo piatto sotto una frequenza, poi 1/f) o "fixed" (retta)
+FOOOF_SETTINGS = dict(peak_width_limits=(1.0, 12.0), max_n_peaks=8, min_peak_height=0.05,
+                      peak_threshold=2.0)
+ALPHA_PEAK_BAND = (8.0, 13.0) # dove cercare il picco alfa individuale tra i picchi di FOOOF
 KS_N_PERM = 5000            # permutazioni del test KS sulle CDF
 
 # ---- etichette eventi -> frequenza di stimolo

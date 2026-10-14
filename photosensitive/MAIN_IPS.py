@@ -35,6 +35,12 @@ from descriptive_analysis.summary_stats import (band_group_summary, compare_grou
 warnings.filterwarnings("ignore")
 
 
+# risultati di FOOOF salvati per canale e (media sui canali) per soggetto
+AP_COLS = dict(aperiodic_exponent="exponent", aperiodic_offset="offset",
+               aperiodic_knee_hz="knee_hz", aperiodic_r2="r2", aperiodic_error="error",
+               alpha_peak_hz="alpha_cf", alpha_peak_power="alpha_pw", n_peaks="n_peaks")
+
+
 def analyze_subject(epochs, group, sid):
     """Tutte le feature di un soggetto. Usa solo get_data/info/ch_names/events/event_id."""
     sf = epochs.info["sfreq"]
@@ -78,10 +84,10 @@ def analyze_subject(epochs, group, sid):
     ec, ch_sig, sig_subj = signal_tables(data, sf, names, labels, fstim, cfg.STAT_N_SEGMENTS,
                                          cfg.ACF_MAX_LAG_S, cfg.STAT_ALPHA)
     # componente aperiodica 1/f per canale (sulla PSD media sulle epoche)
-    ap = aperiodic_fit(psd_sub, freqs, cfg.APERIODIC_RANGE)
-    ch_sig["aperiodic_exponent"] = ap["exponent"]
-    ch_sig["aperiodic_offset"] = ap["offset"]
-    ch_sig["aperiodic_r2"] = ap["r2"]
+    ap = aperiodic_fit(psd_sub, freqs, cfg.APERIODIC_RANGE, cfg.APERIODIC_MODE,
+                       cfg.FOOOF_SETTINGS, cfg.ALPHA_PEAK_BAND)
+    for col, key in AP_COLS.items():
+        ch_sig[col] = ap[key]
     for df in (ec, ch_sig):
         df.insert(0, "subject", sid)
         df.insert(0, "group", group)
@@ -91,9 +97,7 @@ def analyze_subject(epochs, group, sid):
                    snr_broadband_dB=np.nanmean(
                        snr_broadband(psd_sub, freqs, cfg.SNR_SIGNAL, cfg.SNR_NOISE)),
                    **amp["stats"], **sig_subj,
-                   aperiodic_exponent=np.nanmean(ap["exponent"]),
-                   aperiodic_offset=np.nanmean(ap["offset"]),
-                   aperiodic_r2=np.nanmean(ap["r2"]))
+                   **{col: np.nanmean(ap[key]) for col, key in AP_COLS.items()})
     store = dict(group=group, subject=sid, f=freqs, psd=psd_sub.mean(0),
                  heat=np.log10(psd[:, roi, :].mean(1)), fstim=fstim, amp=amp, aperiodic=ap)
     return band_df, epoch_rows, summary, store, ec, ch_sig
@@ -170,7 +174,8 @@ def main():
     metrics = [c for c in wide.columns if c.startswith(("log10_abs_", "rel_"))] + \
               ["snr_broadband_dB", "rms_uV", "std_uV", "skew", "excess_kurtosis",
                "frac_beyond_3sd", "ks_D_vs_gauss", "n_epochs", "log10_var", "var_cv_epochs",
-               "acfw_ms", "frac_nonstationary", "aperiodic_exponent", "aperiodic_offset"] + snr_cols
+               "acfw_ms", "frac_nonstationary", "aperiodic_exponent", "aperiodic_offset",
+               "aperiodic_knee_hz", "alpha_peak_hz", "alpha_peak_power"] + snr_cols
 
     # epoche disponibili
     counts, counts_group = epoch_counts(epoch_df)
@@ -185,7 +190,7 @@ def main():
     chan = chan_bands.reset_index().merge(pd.concat(ch_list, ignore_index=True),
                                           on=["group", "subject", "channel"], how="outer")
     topo_metrics = [f"log10_abs_{b}" for b in cfg.BANDS] + ["log10_var", "acfw_ms",
-                                                         "aperiodic_exponent"]
+                                                         "aperiodic_exponent", "alpha_peak_hz"]
     chan_tests = channel_group_tests(chan, topo_metrics)
     print_epoch_and_cdf_summary(counts_group, ks_df)
 

@@ -88,9 +88,17 @@ def test_stationarity_white_noise_vs_trend():
 
 
 def test_aperiodic_exponent_recovered_with_alpha_peak():
+    # spettro con knee a 6 Hz, esponente 1.8 e picco alfa a 10.5 Hz
     f = np.arange(1, 70, 0.1)
+    psd = 10 ** (1.0 - np.log10(6.0 ** 1.8 + f ** 1.8)) * (1 + 3 * np.exp(-(f - 10.5) ** 2 / 2))
+    r = aperiodic_fit(psd[None], f, (2, 40), mode="knee")
+    if r["method"].startswith("FOOOF"):
+        assert abs(r["exponent"][0] - 1.8) < 0.15
+        assert abs(r["knee_hz"][0] - 6.0) < 1.0
+        assert abs(r["alpha_cf"][0] - 10.5) < 0.3
+    # senza knee: retta 1/f^1.5 con picco alfa, anche con il metodo di riserva
     psd = 10 ** (1.0 - 1.5 * np.log10(f)) * (1 + 8 * np.exp(-(f - 10) ** 2 / 2))
-    r = aperiodic_fit(psd[None], f, (2, 40))
+    r = aperiodic_fit(psd[None], f, (2, 40), mode="fixed")
     assert abs(r["exponent"][0] - 1.5) < 0.1
 
 

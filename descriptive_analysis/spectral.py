@@ -70,30 +70,28 @@ def band_power_table(psd, freqs, ch_names, bands, total_range=(1.0, 45.0)):
     return pd.DataFrame(rows)
 
 
-def aperiodic_fit(psd, freqs, frange=(2.0, 40.0)):
+FOOOF_DEFAULTS = dict(peak_width_limits=(1.0, 12.0), max_n_peaks=8, min_peak_height=0.05,
+                      peak_threshold=2.0)
+
+
+def _aperiodic_line_fit(psd, freqs, frange):
     """
-    Componente aperiodica (1/f) dello spettro, per canale: log10 P(f) = offset - exponent * log10 f.
-    psd: (n_channels, n_f). Fit robusto in 2 passi, come la modalita' 'fixed' di FOOOF/specparam:
-      1. retta ai minimi quadrati su tutti i punti in frange (scala log-log);
-      2. si tengono solo i punti sotto o sulla retta (i picchi oscillatori, es. alpha o la
-         risposta alla stimolazione, stanno sopra) e si rifitta.
-    exponent > 0: spettro che scende; piu' grande = piu' ripido (piu' potenza lenta rispetto a
-    quella veloce; spesso letto come bilancio eccitazione/inibizione).
-    Ritorna dict di array per canale: exponent, offset (log10 uV^2/Hz a 1 Hz), r2 (bonta' del
-    fit sui punti tenuti), n_points.
+    Riserva se FOOOF non e' installato: retta robusta in log-log in 2 passi (come il primo passo
+    di FOOOF in modalita' 'fixed'): retta su tutti i punti, poi solo sui punti sotto la retta.
     """
     m = (freqs >= frange[0]) & (freqs <= frange[1])
     x = np.log10(freqs[m])
     n_ch = psd.shape[0]
-    out = {k: np.full(n_ch, np.nan) for k in ("exponent", "offset", "r2", "n_points")}
+    out = {k: np.full(n_ch, np.nan) for k in ("exponent", "offset", "r2")}
+    fit = np.full((n_ch, m.sum()), np.nan)
     for c in range(n_ch):
         with np.errstate(divide="ignore", invalid="ignore"):
             y = np.log10(psd[c, m])
         ok = np.isfinite(y)
         if ok.sum() < 5:
             continue
-        b1, b0 = np.polyfit(x[ok], y[ok], 1)                    # passo 1
-        keep = ok & (y - (b0 + b1 * x) <= 0)                     # passo 2: niente picchi
+        b1, b0 = np.polyfit(x[ok], y[ok], 1)
+        keep = ok & (y - (b0 + b1 * x) <= 0)
         if keep.sum() < 5:
             keep = ok
         b1, b0 = np.polyfit(x[keep], y[keep], 1)
@@ -101,9 +99,64 @@ def aperiodic_fit(psd, freqs, frange=(2.0, 40.0)):
         ss = ((y[keep] - y[keep].mean()) ** 2).sum()
         out["exponent"][c], out["offset"][c] = -b1, b0
         out["r2"][c] = 1 - (res ** 2).sum() / ss if ss > 0 else np.nan
-        out["n_points"][c] = keep.sum()
+        fit[c] = b0 + b1 * x
+    nan = np.full(n_ch, np.nan)
+    out.update(knee=nan.copy(), knee_hz=nan.copy(), error=nan.copy(), n_peaks=nan.copy(),
+               alpha_cf=nan.copy(), alpha_pw=nan.copy(), fit_freqs=freqs[m], ap_fit=fit,
+               method="line (FOOOF not installed)")
     return out
 
+
+def aperiodic_fit(psd, freqs, frange=(2.0, 40.0), mode="knee", settings=None,
+                  alpha_band=(8.0, 13.0)):
+    """
+    Parametrizzazione dello spettro con FOOOF (Donoghue et al., Nat Neurosci 2020), per canale.
+    psd: (n_channels, n_f) in uV^2/Hz. Lo spettro (in log10) e' modellato come
+        componente aperiodica + picchi gaussiani
+    componente aperiodica:
+        mode="fixed": log10 P = offset - log10(f^exponent)            (una retta in log-log)
+        mode="knee" : log10 P = offset - log10(knee + f^exponent)     (piatta sotto il knee,
+                      1/f^exponent sopra); frequenza del knee = knee^(1/exponent) Hz
+    Ritorna dict di array per canale: exponent, offset, knee, knee_hz (NaN se non c'e' knee),
+    r2 ed error (bonta' del fit completo), n_peaks, alpha_cf / alpha_pw (frequenza e potenza
+    sopra il fondo 1/f del picco piu' alto in alpha_band: frequenza alfa individuale),
+    fit_freqs e ap_fit (componente aperiodica fittata, log10, per i grafici), method.
+    Senza FOOOF installato usa una retta robusta (_aperiodic_line_fit) e avvisa.
+    """
+    try:
+        import warnings
+        with warnings.catch_warnings(record=True):        # fooof 1.1 forza un avviso di
+            from fooof import FOOOFGroup                    # deprecazione: lo si intercetta
+    except ImportError:
+        print("    ATTENZIONE: fooof non installato (pip install fooof): uso una retta in log-log")
+        return _aperiodic_line_fit(psd, freqs, frange)
+
+    fg = FOOOFGroup(**{**FOOOF_DEFAULTS, **(settings or {})}, aperiodic_mode=mode, verbose=False)
+    fg.fit(freqs, psd, list(frange))
+    ap = fg.get_params("aperiodic_params")
+    ap = ap.reshape(psd.shape[0], -1)
+    offset, exponent = ap[:, 0], ap[:, -1]
+    knee = ap[:, 1] if mode == "knee" else np.zeros(psd.shape[0])
+    with np.errstate(invalid="ignore", divide="ignore"):
+        knee_hz = np.where(knee > 0, np.abs(knee) ** (1 / exponent), np.nan)
+    n_ch = psd.shape[0]
+    alpha_cf, alpha_pw, n_peaks = np.full(n_ch, np.nan), np.full(n_ch, np.nan), np.zeros(n_ch)
+    pk = np.asarray(fg.get_params("peak_params")).reshape(-1, 4)    # CF, PW, BW, canale
+    for cf, pw, _, c in pk:
+        if not np.isfinite(cf):
+            continue
+        c = int(c)
+        n_peaks[c] += 1
+        if alpha_band[0] <= cf <= alpha_band[1] and not (pw <= np.nan_to_num(alpha_pw[c], nan=-np.inf)):
+            alpha_cf[c], alpha_pw[c] = cf, pw
+    f = fg.freqs
+    with np.errstate(invalid="ignore", divide="ignore"):
+        ap_fit = offset[:, None] - np.log10(knee[:, None] + f[None, :] ** exponent[:, None])
+    return dict(exponent=exponent, offset=offset, knee=knee, knee_hz=knee_hz,
+                r2=np.asarray(fg.get_params("r_squared"), float),
+                error=np.asarray(fg.get_params("error"), float), n_peaks=n_peaks,
+                alpha_cf=alpha_cf, alpha_pw=alpha_pw, fit_freqs=f, ap_fit=ap_fit,
+                method=f"FOOOF ({mode})")
 
 
 """

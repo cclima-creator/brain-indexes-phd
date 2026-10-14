@@ -578,12 +578,22 @@ def plot_variance_acfw(subj_meta, ec, ks_tests, colors, out_png):
 
 def plot_aperiodic(store, subj_meta, colors, out_png, frange=(2.0, 40.0)):
     """
-    fig12. Sinistra: PSD media di gruppo (log-log) con la retta aperiodica media del gruppo
-    (offset - exponent * log10 f) nel range del fit. Centro e destra: esponente e offset
-    per soggetto (media sui canali), con test tra gruppi.
+    fig12 (FOOOF). Pannello 1: PSD media di gruppo (log-log) e componente aperiodica media del
+    gruppo (tratteggiata, nel range del fit). Poi, per soggetto (media sui canali) con test tra
+    gruppi: esponente, frequenza del knee (solo modalita' 'knee'; altrimenti offset) e
+    frequenza del picco alfa individuale.
     """
-    fig, axes = plt.subplots(1, 3, figsize=(17, 5.4), gridspec_kw=dict(width_ratios=[1.6, 1, 1]))
+    has_knee = "aperiodic_knee_hz" in subj_meta and subj_meta["aperiodic_knee_hz"].notna().any()
+    has_alpha = "alpha_peak_hz" in subj_meta and subj_meta["alpha_peak_hz"].notna().any()
+    panels = [("aperiodic_exponent", "Aperiodic exponent")]
+    panels.append(("aperiodic_knee_hz", "Knee frequency (Hz)") if has_knee
+                  else ("aperiodic_offset", "Aperiodic offset (log10 µV²/Hz)"))
+    if has_alpha:
+        panels.append(("alpha_peak_hz", "Alpha peak frequency (Hz)"))
+    fig, axes = plt.subplots(1, 1 + len(panels), figsize=(6.5 + 4.2 * len(panels), 5.4),
+                             gridspec_kw=dict(width_ratios=[1.6] + [1] * len(panels)))
     ax = axes[0]
+    method = ""
     for g, c in colors.items():
         items = [s for s in store if s["group"] == g and "aperiodic" in s]
         if not items:
@@ -592,16 +602,19 @@ def plot_aperiodic(store, subj_meta, colors, out_png, frange=(2.0, 40.0)):
         m = (f >= 1) & (f <= 45)
         P = np.array([np.interp(f[m], s["f"], s["psd"]) for s in items])
         ax.loglog(f[m], P.mean(0), color=c, lw=2, label=f"{_label(g)} PSD")
-        expo = np.mean([np.nanmean(s["aperiodic"]["exponent"]) for s in items])
-        off = np.mean([np.nanmean(s["aperiodic"]["offset"]) for s in items])
-        fr = np.linspace(frange[0], frange[1], 100)
-        ax.loglog(fr, 10 ** (off - expo * np.log10(fr)), color=c, ls="--", lw=2.5,
-                  label=f"aperiodic fit, exponent = {expo:.2f}")
-    ax.axvspan(frange[0], frange[1], color="0.9", zorder=0, lw=0)
+        ap = [s["aperiodic"] for s in items if "ap_fit" in s["aperiodic"]]
+        if ap:
+            ff = ap[0]["fit_freqs"]
+            curve = np.nanmean([np.nanmean(a["ap_fit"], 0) for a in ap if len(a["fit_freqs"]) == len(ff)], 0)
+            expo = np.nanmean([np.nanmean(a["exponent"]) for a in ap])
+            ax.loglog(ff, 10 ** curve, color=c, ls="--", lw=2.5,
+                      label=f"aperiodic fit, exponent = {expo:.2f}")
+            method = ap[0].get("method", "")
+    ax.axvspan(frange[0], frange[1], color="0.92", zorder=0, lw=0)
     ax.set(xlabel="Frequency (Hz)", ylabel="PSD (µV²/Hz)",
-           title=f"Group mean PSD and 1/f fit ({frange[0]:g}–{frange[1]:g} Hz)")
+           title=f"Group mean PSD and aperiodic fit\n{method}, {frange[0]:g}–{frange[1]:g} Hz")
     ax.legend(fontsize=BASE_FONT - 3)
-    _box_by_group(axes[1], subj_meta, "aperiodic_exponent", colors, "Aperiodic exponent")
-    _box_by_group(axes[2], subj_meta, "aperiodic_offset", colors, "Aperiodic offset (log10 µV²/Hz)")
-    fig.suptitle("Aperiodic (1/f) component of the spectrum")
+    for a, (col, lab) in zip(axes[1:], panels):
+        _box_by_group(a, subj_meta, col, colors, lab)
+    fig.suptitle("Spectral parameterization: aperiodic (1/f) component and alpha peak")
     _save(fig, out_png)

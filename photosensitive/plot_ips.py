@@ -136,8 +136,9 @@ def main():
             out / "fig13_topo_band_power.png", "Band power topography")
         topography.plot_group_topomaps(
             chan, [("log10_var", "log10 variance\n(µV²)"), ("acfw_ms", "ACF width\n(ms)"),
-                   ("aperiodic_exponent", "aperiodic\nexponent")], colors,
-            out / "fig14_topo_signal.png", "Variance, ACF width and 1/f exponent topography")
+                   ("aperiodic_exponent", "aperiodic\nexponent"),
+                   ("alpha_peak_hz", "alpha peak\nfrequency (Hz)")], colors,
+            out / "fig14_topo_signal.png", "Variance, ACF width, 1/f exponent and alpha peak topography")
     print("\nGrafici salvati in:", out)
 
 
