@@ -117,6 +117,16 @@ def test_ks_permutation_same_vs_different():
     assert same["p_perm"] > 0.05 and diff["p_perm"] < 0.01
 
 
+def test_old_and_new_channel_names_are_unified():
+    from descriptive_analysis.topography import unify_channel_names
+    chan = pd.DataFrame(dict(group="a", subject=["s1", "s1", "s2", "s2"],
+                             channel=["T3", "T7", "T7", "O1"], v=[1.0, 3.0, 5.0, 7.0]))
+    out, renamed = unify_channel_names(chan)
+    assert renamed == {"T3": "T7"}
+    assert out.set_index(["subject", "channel"])["v"].to_dict() == {
+        ("s1", "T7"): 2.0, ("s2", "T7"): 5.0, ("s2", "O1"): 7.0}
+
+
 if __name__ == "__main__":
     for name, fn in list(globals().items()):
         if name.startswith("test_"):

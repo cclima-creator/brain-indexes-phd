@@ -17,6 +17,27 @@ from .plots import _label, _save, BASE_FONT
 # precedenti) contengono anche i nomi vecchi T3/T4/T5/T6
 MONTAGES = ("colin27_1020", "standard_1020")
 
+# nomi vecchi del sistema 10-20 -> nomi nuovi (stessa posizione sullo scalpo)
+ALIASES = {"T3": "T7", "T4": "T8", "T5": "P7", "T6": "P8"}
+
+
+def unify_channel_names(chan, group_col="group"):
+    """
+    Unisce i canali che sono lo stesso punto sullo scalpo con nomi diversi (T3=T7, T4=T8,
+    T5=P7, T6=P8), cosi' soggetti registrati con convenzioni diverse finiscono sullo stesso
+    elettrodo. Se un soggetto ha entrambi i nomi, i due valori vengono mediati.
+    Ritorna (tabella con nomi unificati, dict dei nomi rinominati).
+    """
+    up = {k.upper(): v for k, v in ALIASES.items()}
+    renamed = {c: up[c.upper()] for c in chan["channel"].unique() if c.upper() in up}
+    if not renamed:
+        return chan, renamed
+    out = chan.copy()
+    out["channel"] = out["channel"].replace(renamed)
+    num = out.select_dtypes("number").columns
+    out = out.groupby([group_col, "subject", "channel"], sort=False)[list(num)].mean().reset_index()
+    return out, renamed
+
 
 def channel_info(ch_names, montages=MONTAGES):
     """
@@ -38,6 +59,17 @@ def channel_info(ch_names, montages=MONTAGES):
     up = {k.upper(): k for k in pos}
     found = [c for c in ch_names if c.upper() in up]
     missing = [c for c in ch_names if c.upper() not in up]
+    # due canali nella stessa posizione bloccano plot_topomap: si tiene il primo e si avvisa
+    seen, keep = {}, []
+    for c in found:
+        key = tuple(np.round(pos[up[c.upper()]], 6))
+        if key in seen:
+            missing.append(c)
+            print(f"    topografia: {c} ha la stessa posizione di {seen[key]}, escluso")
+        else:
+            seen[key] = c
+            keep.append(c)
+    found = keep
     info = mne.create_info(found, 100.0, "eeg")
     dig = mne.channels.make_dig_montage({c: pos[up[c.upper()]] for c in found}, coord_frame="head")
     info.set_montage(dig)
@@ -55,6 +87,10 @@ def plot_group_topomaps(chan, metrics, colors, out_png, title, group_col="group"
     Ritorna la tabella dei test canale per canale.
     """
     groups = [g for g in colors if g in set(chan[group_col])]
+    chan, renamed = unify_channel_names(chan, group_col)
+    if renamed:
+        print("    topografia: nomi vecchi unificati ai nuovi: "
+              + ", ".join(f"{a}->{b}" for a, b in renamed.items()))
     names = list(dict.fromkeys(chan["channel"]))
     info, found, missing = channel_info(names)
     if missing:
