@@ -120,7 +120,7 @@ def main():
         if r is not None:
             print(f"\nfig8 {g}: gaussiana di fit mu = {r['mu']:.3f}, sigma = {r['sigma']:.3f}")
             for t in r["tail"]:
-                print(f"  oltre ±{t['sd']} SD: dati {t['data_pct']:.4g}%  gaussiana {t['gauss_pct']:.4g}%"
+                print(f"  oltre ±{t['sd']:g} SD: dati {t['data_pct']:.4g}%  gaussiana {t['gauss_pct']:.4g}%"
                       f"  rapporto {t['ratio']:.3g}")
     # ---- nuove figure: servono i risultati di un MAIN_IPS.py recente
     if "ec" not in res:

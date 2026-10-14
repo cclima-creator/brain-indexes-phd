@@ -304,6 +304,7 @@ def plot_relative_power_boxplot(subj, bands, colors, out_png, seed=0):
 
 
 # ------------------------------------------------------------------ AMPIEZZE
+SD_LEVELS = (1, 1.5, 2, 3, 4, 5)     # soglie (in SD) della tabella e delle linee della fig. 8
 def _runs(mask):
     """Indici (inizio, fine) dei tratti consecutivi True in mask."""
     edges = np.diff(np.r_[0, mask.astype(int), 0])
@@ -319,7 +320,7 @@ def _keep_runs(mask, min_run):
     return out
 
 
-def amplitude_deviation_from_gaussian(store, group, n_boot=2000, seed=0, sd_levels=(1, 2, 3, 4, 5),
+def amplitude_deviation_from_gaussian(store, group, n_boot=2000, seed=0, sd_levels=SD_LEVELS,
                                       min_run=3):
     """
     Distribuzione delle ampiezze z-scored di un gruppo vs la SUA gaussiana di fit.
@@ -385,7 +386,7 @@ def _fmt_pct(v):
 
 
 def plot_amplitude_z_group(store, group, color, out_png, n_boot=2000, seed=0,
-                           sd_levels=(1, 2, 3, 4, 5)):
+                           sd_levels=SD_LEVELS):
     """
     Una figura per gruppo. Sopra: densita' (asse y log) dei soggetti e del gruppo con IC 95%,
     gaussiana di fit del gruppo, zone dove i dati deviano dalla gaussiana, linee a ±1..5 SD.
@@ -437,13 +438,14 @@ def plot_amplitude_z_group(store, group, color, out_png, n_boot=2000, seed=0,
     ax2.fill_between(c, rlo, rhi, color=color, alpha=0.3, lw=0)
     ax2.plot(c, ratio, color=color, lw=2.5)
     ax2.axhline(0, color="k", ls="--", lw=1.5)
-    ticks = [-k for k in sd_levels[::-1]] + [0] + list(sd_levels)
+    whole = [k for k in sd_levels if float(k).is_integer()]       # tacche solo sugli interi
+    ticks = [-k for k in whole[::-1]] + [0] + whole
     ax2.set_xticks(ticks)
     ax2.set(xlabel="Amplitude (SD units, z-scored per channel)", ylabel="log10(data / Gaussian)",
             xlim=(c[0], c[-1]))
 
     ax3.axis("off")
-    rows = [["% beyond ±k SD"] + [f"±{t['sd']} SD" for t in r["tail"]],
+    rows = [["% beyond ±k SD"] + [f"±{t['sd']:g} SD" for t in r["tail"]],
             ["data"] + [_fmt_pct(t["data_pct"]) for t in r["tail"]],
             ["Gaussian fit"] + [_fmt_pct(t["gauss_pct"]) for t in r["tail"]],
             ["data / Gaussian"] + [f"{t['ratio']:.3g}" if np.isfinite(t["ratio"]) else "n.a."
