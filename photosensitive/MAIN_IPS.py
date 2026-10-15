@@ -25,7 +25,8 @@ if str(ROOT) not in sys.path:
 from photosensitive import config_ips as cfg
 from photosensitive.io_eeg import discover_files, load_epochs, epoch_labels, get_data_uv   ##io_eeg to load data
 from photosensitive.report import check_output_dir, save_tables_excel, save_results
-from descriptive_analysis.spectral import compute_psd, band_power_table, aperiodic_fit
+from descriptive_analysis.spectral import (compute_psd, band_power_table, aperiodic_fit,
+                                           psd_leave_one_out, group_psd_matrix)
 from descriptive_analysis.snr import snr_broadband, snr_narrowband
 from descriptive_analysis.amplitude import amplitude_distribution
 from descriptive_analysis.summary_stats import (band_group_summary, compare_groups, epoch_counts,
@@ -133,6 +134,19 @@ def print_epoch_and_cdf_summary(counts_group, ks_df):
         print(ks_df.round(4).to_string(index=False))
 
 
+def print_loo_summary(loo):
+    """Console: i soggetti che spostano di piu' la PSD media del proprio gruppo (leave-one-out)."""
+    if loo.empty:
+        return
+    print("\n=== Leave-one-out sulla PSD media (fig1): contributo di ogni soggetto ===")
+    print("change = 10*log10(media tutti / media senza il soggetto), media di |change| su 1-45 Hz")
+    for g, d in loo.groupby("group", sort=False):
+        print(f"  {g}: primi 3 -> " + ", ".join(
+            f"{r.subject} {r.mean_abs_change_dB:.2f} dB" for r in d.head(3).itertuples()))
+        bad = d.loc[d.influential, "subject"].tolist()
+        print(f"    influenti (oltre mediana + 3 MAD e >= soglia in dB): {bad if bad else 'nessuno'}")
+
+
 def main():
     out_dir = check_output_dir(cfg.OUT_DIR, cfg.OUTPUT_NAMES)
     print("Cartella di output:", out_dir)
@@ -193,6 +207,16 @@ def main():
                                                          "aperiodic_exponent", "alpha_peak_hz"]
     chan_tests = channel_group_tests(chan, topo_metrics)
     print_epoch_and_cdf_summary(counts_group, ks_df)
+    # contributo leave-one-out di ogni soggetto alla PSD media del gruppo (fig1 / fig1b)
+    loo = []
+    for g in cfg.GROUPS:
+        P, subs = group_psd_matrix(store, g, cfg.COMMON_F)
+        _, t = psd_leave_one_out(P, cfg.COMMON_F, subs, cfg.BANDS, cfg.LOO_Z_THRESH, cfg.LOO_MIN_DB)
+        if len(t):
+            t.insert(0, "group", g)
+            loo.append(t)
+    loo = pd.concat(loo, ignore_index=True) if loo else pd.DataFrame()
+    print_loo_summary(loo)
 
     tables = {
         "group_summary_bands": band_group_summary(long, subj),
@@ -202,6 +226,7 @@ def main():
         "epoch_table_snr": epoch_df,
         "band_power_per_subject": subj,
         "band_power_per_channel": long,
+        "psd_leave_one_out": loo,
         "epoch_counts_group": counts_group,
         "epoch_counts": counts,
         "ks_permutation_tests": ks_df,

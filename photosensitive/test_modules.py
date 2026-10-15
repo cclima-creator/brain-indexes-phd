@@ -15,7 +15,8 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import pandas as pd
 
-from descriptive_analysis.spectral import compute_psd, band_power_table, aperiodic_fit
+from descriptive_analysis.spectral import (compute_psd, band_power_table, aperiodic_fit,
+                                           psd_leave_one_out)
 from descriptive_analysis.snr import snr_at_frequency, snr_broadband
 from descriptive_analysis.amplitude import amplitude_distribution
 from descriptive_analysis.summary_stats import (acf_width, stationarity_test, epoch_counts,
@@ -133,6 +134,16 @@ def test_old_and_new_channel_names_are_unified():
     assert renamed == {"T3": "T7"}
     assert out.set_index(["subject", "channel"])["v"].to_dict() == {
         ("s1", "T7"): 2.0, ("s2", "T7"): 5.0, ("s2", "O1"): 7.0}
+
+
+def test_leave_one_out_flags_outlier_subject():
+    f = np.arange(1, 45.05, 0.1)
+    rng = np.random.default_rng(8)
+    P = np.array([10 / f * rng.uniform(0.8, 1.2) for _ in range(8)])
+    P[3] *= 6                                                   # soggetto 6 volte piu' potente
+    delta, t = psd_leave_one_out(P, f, [f"s{i}" for i in range(8)])
+    assert t.loc[t.influential, "subject"].tolist() == ["s3"]
+    assert (delta[3] > 0).all() and (delta[np.arange(8) != 3] < 0).all()
 
 
 if __name__ == "__main__":

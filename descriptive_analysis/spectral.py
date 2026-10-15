@@ -158,6 +158,53 @@ def aperiodic_fit(psd, freqs, frange=(2.0, 40.0), mode="knee", settings=None,
                 alpha_cf=alpha_cf, alpha_pw=alpha_pw, fit_freqs=f, ap_fit=ap_fit,
                 method=f"FOOOF ({mode})")
 
+def psd_leave_one_out(P, freqs, subjects, bands=None, z_thresh=3.0, min_db=0.5):
+    """
+    Contributo Leave-One-Out (LOO) di ogni soggetto alla PSD media di un gruppo (come in fig1:
+    media delle PSD lineari).
+    P: (n_soggetti, n_f) PSD in uV^2/Hz sulla stessa griglia di frequenze.
+    Per il soggetto i: delta_i(f) = 10*log10( media_tutti(f) / media_senza_i(f) ) in dB.
+      > 0: il soggetto alza la media a quella frequenza; < 0: la abbassa; 0: nessun effetto.
+    Riassunti per soggetto: media e massimo di |delta| su tutte le frequenze, frequenza del massimo,
+    delta medio in ogni banda. 'influential' = media |delta| oltre mediana + z_thresh * MAD robusta
+    del gruppo (soggetto che pesa sulla media molto piu' degli altri) E almeno min_db dB
+    (cosi' quando tutti sono simili uno scarto di pochi centesimi di dB non viene segnalato).
+    Ritorna (delta (n_soggetti, n_f), tabella per soggetto). Servono almeno 2 soggetti.
+    """
+    P = np.asarray(P, float)
+    n = P.shape[0]
+    if n < 2:
+        return np.full_like(P, np.nan), pd.DataFrame()
+    full = P.mean(0)
+    loo = (P.sum(0)[None, :] - P) / (n - 1)                  # media senza il soggetto i
+    with np.errstate(divide="ignore", invalid="ignore"):
+        delta = 10 * np.log10(full[None, :] / loo)
+    ad = np.abs(delta)
+    rows = []
+    for i, s in enumerate(subjects):
+        k = int(np.nanargmax(ad[i])) if np.isfinite(ad[i]).any() else 0
+        r = dict(subject=s, mean_abs_change_dB=float(np.nanmean(ad[i])),
+                 max_abs_change_dB=float(np.nanmax(ad[i])), freq_of_max_Hz=float(freqs[k]),
+                 signed_change_at_max_dB=float(delta[i, k]))
+        for b, (lo, hi) in (bands or {}).items():
+            m = (freqs >= lo) & (freqs < hi)
+            r[f"change_{b}_dB"] = float(np.nanmean(delta[i, m])) if m.any() else np.nan
+        rows.append(r)
+    t = pd.DataFrame(rows)
+    med = t["mean_abs_change_dB"].median()
+    mad = 1.4826 * (t["mean_abs_change_dB"] - med).abs().median()
+    t["robust_z"] = (t["mean_abs_change_dB"] - med) / mad if mad > 0 else 0.0
+    t["influential"] = (t["robust_z"] > z_thresh) & (t["mean_abs_change_dB"] >= min_db)
+    return delta, t.sort_values("mean_abs_change_dB", ascending=False).reset_index(drop=True)
+
+
+def group_psd_matrix(store, group, common_f):
+    """PSD (media su epoche e canali) dei soggetti di un gruppo, interpolate su common_f."""
+    items = [s for s in store if s["group"] == group]
+    P = np.array([np.interp(common_f, s["f"], s["psd"]) for s in items]) if items else \
+        np.empty((0, len(common_f)))
+    return P, [s["subject"] for s in items]
+
 
 """
 long:

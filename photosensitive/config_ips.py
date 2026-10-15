@@ -55,6 +55,8 @@ FOOOF_SETTINGS = dict(peak_width_limits=(1.0, 12.0), max_n_peaks=8, min_peak_hei
                       peak_threshold=2.0)
 ALPHA_PEAK_BAND = (8.0, 13.0) # dove cercare il picco alfa individuale tra i picchi di FOOOF
 KS_N_PERM = 5000            # permutazioni del test KS sulle CDF
+LOO_Z_THRESH = 3.0          # fig1b: soggetto 'influente' se il suo contributo supera mediana + 3 MAD
+LOO_MIN_DB = 0.5            #        e sposta la media del gruppo di almeno 0.5 dB in media
 
 # ---- etichette eventi -> frequenza di stimolo
 STIM_FREQ_MAP = {}          # es. {"S 11": 10.0}: ha la precedenza sul parsing automatico
@@ -72,6 +74,7 @@ def parse_stim_freq(label):
 # ---- file prodotti (servono al controllo iniziale della cartella di output)
 OUTPUT_NAMES = [
     "fig1_psd_all_subjects.png", "fig1_psd_all_subjects_interactive.html",
+    "fig1b_psd_leave_one_out.png",
     "fig2_psd_each_subject.png", "fig3_epoch_maps.png",
     "fig4_snr_vs_stim_freq.png", "fig4_snr_vs_stim_freq_interactive.html",
     "fig5_hist_gauss_bands.png", "fig6_relative_power_boxplot.png",
@@ -80,7 +83,7 @@ OUTPUT_NAMES = [
     "fig12_aperiodic.png", "fig13_topo_band_power.png", "fig14_topo_signal.png",
     "risultati_eeg.xlsx", "results.pkl",
 ]
-SHEET_ORDER = ["group_summary_bands", "group_tests", "subject_level_metrics",
+SHEET_ORDER = ["group_summary_bands", "group_tests", "subject_level_metrics", "psd_leave_one_out",
                "epoch_counts_group", "epoch_counts", "ks_permutation_tests", "channel_tests",
                "snr_by_stim_freq_group", "epoch_table_snr", "band_power_per_subject",
                "band_power_per_channel", "signal_per_channel", "signal_per_epoch_channel"]

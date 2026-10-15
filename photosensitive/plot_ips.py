@@ -103,6 +103,9 @@ def main():
     plots.plot_psd_all_subjects(store, colors, out / "fig1_psd_all_subjects.png",
                                 out / "fig1_psd_all_subjects_interactive.html",
                                 cfg.COMMON_F, fmax)
+    plots.plot_psd_leave_one_out(store, colors, out / "fig1b_psd_leave_one_out.png", cfg.COMMON_F,
+                                 fmax, cfg.BANDS, getattr(cfg, "LOO_Z_THRESH", 3.0),
+                                 getattr(cfg, "LOO_MIN_DB", 0.5))
     plots.plot_psd_each_subject(store, colors, out / "fig2_psd_each_subject.png", fmax)
     plots.plot_epoch_maps(store, colors, out / "fig3_epoch_maps.png", fmax)
     plot_snr_vs_stim_freq(snr_freq, colors, out / "fig4_snr_vs_stim_freq.png",

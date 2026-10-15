@@ -14,6 +14,7 @@ import warnings
 from pathlib import Path
 
 import numpy as np
+import pandas as pd
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
@@ -188,6 +189,62 @@ def plot_psd_all_subjects(store, colors, out_png, out_html=None, common_f=None, 
                          yaxis=dict(type="log", title="PSD (µV²/Hz)"),
                          title="PSD per subject (double-click a legend entry to isolate it)")
         fi.write_html(out_html, include_plotlyjs=True)
+
+
+def plot_psd_leave_one_out(store, colors, out_png, common_f=None, fmax=45.0, bands=None,
+                           z_thresh=3.0, min_db=0.5):
+    """
+    fig1b. Contributo Leave-One-Out di ogni soggetto alla PSD media del suo gruppo (fig1).
+    Sopra, per gruppo: delta(f) = 10*log10(media tutti / media senza il soggetto), una linea per
+    soggetto (> 0 = il soggetto alza la media). Sotto: media di |delta| per soggetto, ordinata;
+    tratteggio = soglia 'influente' (mediana + z_thresh * MAD robusta). Ritorna la tabella.
+    """
+    from .spectral import psd_leave_one_out, group_psd_matrix
+    if common_f is None:
+        common_f = np.arange(1.0, fmax + 1e-9, 0.1)
+    common_f = common_f[common_f <= fmax]
+    groups = [g for g in colors if any(s["group"] == g for s in store)]
+    n_max = max(sum(s["group"] == g for s in store) for g in groups)
+    fig, axes = plt.subplots(2, len(groups), squeeze=False,
+                             figsize=(7.5 * len(groups), 5 + 0.28 * n_max),
+                             gridspec_kw=dict(height_ratios=[1, max(1, 0.06 * n_max)]))
+    tables = []
+    for c, g in enumerate(groups):
+        P, subs = group_psd_matrix(store, g, common_f)
+        delta, t = psd_leave_one_out(P, common_f, subs, bands, z_thresh, min_db)
+        ax, axb = axes[0][c], axes[1][c]
+        if t.empty:
+            ax.set_title(f"{_label(g)}: fewer than 2 subjects")
+            ax.axis("off"); axb.axis("off")
+            continue
+        infl = set(t.loc[t.influential, "subject"])
+        for i, s in enumerate(subs):
+            strong = s in infl
+            ax.semilogx(common_f, delta[i], color="k" if strong else colors[g],
+                        lw=2.2 if strong else 0.9, alpha=1 if strong else 0.5,
+                        label=s[:22] if strong else None, zorder=3 if strong else 2)
+        ax.axhline(0, color="0.3", lw=1, ls="--")
+        ax.set(xlabel="Frequency (Hz)", ylabel="Change of group mean (dB)",
+               title=f"{_label(g)} (n = {len(subs)})", xlim=(common_f[0], fmax))
+        if infl:
+            ax.legend(title="influential", fontsize=BASE_FONT - 4, title_fontsize=BASE_FONT - 3)
+        y = np.arange(len(t))[::-1]
+        axb.barh(y, t["mean_abs_change_dB"], color=[("k" if v else colors[g]) for v in t.influential],
+                 alpha=0.75)
+        axb.set_yticks(y)
+        axb.set_yticklabels([s[:22] for s in t.subject], fontsize=BASE_FONT - 5)
+        med = t["mean_abs_change_dB"].median()
+        mad = 1.4826 * (t["mean_abs_change_dB"] - med).abs().median()
+        axb.axvline(max(med + z_thresh * mad, min_db), color="0.3", ls="--", lw=1.2)
+        axb.set_xlabel("Mean |change| over 1–45 Hz (dB)")
+        t.insert(0, "group", g)
+        tables.append(t)
+    fig.suptitle("Leave-one-out contribution of each subject to the group mean PSD")
+    fig.text(0.5, -0.01, "Change = 10·log10(mean of all subjects / mean without the subject); "
+             f"dashed line = influence threshold: median + {z_thresh:g} × robust SD (MAD), at least {min_db:g} dB",
+             ha="center", fontsize=BASE_FONT - 3)
+    _save(fig, out_png)
+    return pd.concat(tables, ignore_index=True) if tables else pd.DataFrame()
 
 
 def plot_psd_each_subject(store, colors, out_png, fmax=45.0):
