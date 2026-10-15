@@ -101,6 +101,9 @@ def plot_group_topomaps(chan, metrics, colors, out_png, title, group_col="group"
     tests = channel_group_tests(chan[chan.channel.isin(found)], [m for m, _ in metrics], group_col) \
         if len(groups) == 2 else None
 
+    # pochi canali (es. solo ROI occipitale): si colora solo la zona coperta dagli elettrodi,
+    # invece di estendere i valori a tutta la testa
+    extrap = "local" if len(found) < 12 else "head"
     ncol = len(groups) + (1 if len(groups) == 2 else 0)
     fig, axes = plt.subplots(len(metrics), ncol, figsize=(3.6 * ncol + 1.2, 3.3 * len(metrics)),
                              squeeze=False)
@@ -116,7 +119,7 @@ def plot_group_topomaps(chan, metrics, colors, out_png, title, group_col="group"
         for c, g in enumerate(groups):
             ax = axes[r][c]
             im, _ = mne.viz.plot_topomap(np.nan_to_num(means[g], nan=np.nanmean(means[g])), info,
-                                         axes=ax, show=False, cmap=cmap, vlim=vlim, contours=4,
+                                         axes=ax, show=False, cmap=cmap, vlim=vlim, contours=4, extrapolate=extrap,
                                          sensors=True)
             ax.set_title(_label(g) if r == 0 else "", color=colors[g], fontsize=BASE_FONT)
             if c == 0:
@@ -133,7 +136,7 @@ def plot_group_topomaps(chan, metrics, colors, out_png, title, group_col="group"
             q = t["p_fdr"].values if t is not None else np.full(len(found), np.nan)
             p = t["p"].values if t is not None else np.full(len(found), np.nan)
             im, _ = mne.viz.plot_topomap(np.nan_to_num(diff), info, axes=ax, show=False,
-                                         cmap="RdBu_r", vlim=(-lim, lim), contours=4, sensors="k.")
+                                         cmap="RdBu_r", vlim=(-lim, lim), contours=4, extrapolate=extrap, sensors="k.")
             sens = [ln for ln in ax.lines if ln.get_xydata().shape[0] == len(found)]
             if sens:                                   # posizioni 2D dei canali, in ordine
                 xy = sens[0].get_xydata()

@@ -24,7 +24,7 @@ if str(ROOT) not in sys.path:
 
 from photosensitive import config_ips as cfg
 from photosensitive.io_eeg import discover_files, load_epochs, epoch_labels, get_data_uv   ##io_eeg to load data
-from photosensitive.report import check_output_dir, save_tables_excel, save_results
+from photosensitive.report import check_output_dir, save_tables_excel, save_results, FALLBACK_DIR
 from descriptive_analysis.spectral import (compute_psd, band_power_table, aperiodic_fit,
                                            psd_leave_one_out, group_psd_matrix)
 from descriptive_analysis.snr import snr_broadband, snr_narrowband
@@ -147,8 +147,26 @@ def print_loo_summary(loo):
         print(f"    influenti (oltre mediana + 3 MAD e >= soglia in dB): {bad if bad else 'nessuno'}")
 
 
+def pick_channels(ep, wanted, expected):
+    """Tiene solo i canali in wanted (maiuscole ignorate); avvisa se ne manca qualcuno di expected."""
+    up = {c.upper() for c in wanted}
+    keep = [c for c in ep.ch_names if c.upper() in up]
+    if not keep:
+        raise ValueError(f"nessuno dei canali {expected} e' presente nel file")
+    have = {c.upper() for c in keep}
+    alias = {k.upper(): v.upper() for k, v in cfg.CHANNEL_ALIASES.items()}
+    missing = [c for c in expected if c.upper() not in have and alias.get(c.upper()) not in have]
+    print(f"    canali analizzati: {keep}" + (f"  (mancano: {missing})" if missing else ""))
+    return ep.pick(keep)
+
+
 def main():
-    out_dir = check_output_dir(cfg.OUT_DIR, cfg.OUTPUT_NAMES)
+    channel_set, channels, out_root = cfg.choose_channel_set()
+    print(f"Canali: {'tutti i canali EEG' if channels is None else cfg.OCCIPITAL_CHANNELS}")
+    if channels is not None:
+        cfg.ROI_CHANNELS = channels            # anche l'SNR 'roi' usa la ROI occipitale
+    fallback = FALLBACK_DIR if channels is None else FALLBACK_DIR / cfg.OCCIPITAL_SUBDIR
+    out_dir = check_output_dir(out_root, cfg.OUTPUT_NAMES, fallback)
     print("Cartella di output:", out_dir)
 
     band_dfs, epoch_rows, subj_rows, store, ec_list, ch_list = [], [], [], [], [], []
@@ -159,6 +177,8 @@ def main():
             print("  ", fpath.name)
             try:
                 ep = load_epochs(fpath, cfg.FIXED_LENGTH_S, cfg.ANALYSIS_WINDOW)
+                if channels is not None:
+                    ep = pick_channels(ep, channels, cfg.OCCIPITAL_CHANNELS)
                 bd, er, sm, st, ec, ch = analyze_subject(ep, group, fpath.stem)
                 band_dfs.append(bd); epoch_rows += er; subj_rows.append(sm); store.append(st)
                 ec_list.append(ec); ch_list.append(ch)
@@ -240,6 +260,7 @@ def main():
     print_snr_summary(subj_meta)
     save_tables_excel(tables, out_dir / "risultati_eeg.xlsx", cfg.SHEET_ORDER)
     save_results(dict(store=store, long=long, subj=subj, snr_freq=snr_freq, subj_meta=subj_meta,
+                      channel_set=channel_set,
                       counts=counts, ec=ec_all, chan=chan, ks=ks),
                  out_dir / "results.pkl")
     print("\nFatto. Excel e results.pkl in:", out_dir)

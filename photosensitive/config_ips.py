@@ -23,6 +23,31 @@ GROUPS = {"photosensitive": PHOTOSENSITIVE_FOLDER,
 COLORS = {"photosensitive": "tab:red", "not_photosensitive": "tab:blue"}
 OUT_DIR = Path(r"C:\Users\Chiara Clima\Desktop\eeg preprocess criticality\analysis_output_ips")
 
+# ---- quali canali analizzare
+CHANNEL_SET = None          # None = lo script chiede all'avvio; "all" = tutti i canali EEG;
+                            # "occipital" = solo la ROI visiva estesa qui sotto
+OCCIPITAL_CHANNELS = ["O1", "O2", "P3", "P4", "Pz", "T5", "T6"]
+CHANNEL_ALIASES = {"T5": "P7", "T6": "P8"}   # stesso elettrodo con il nome del sistema 10-10
+OCCIPITAL_SUBDIR = "occipital"   # i risultati occipitali vanno in OUT_DIR / occipital
+
+
+def choose_channel_set(choice=None):
+    """
+    Sceglie i canali da analizzare e la cartella dei risultati.
+    choice (o CHANNEL_SET) = "all" / "occipital"; se None lo chiede in console.
+    Ritorna (nome, lista dei canali da tenere o None = tutti, cartella di output).
+    """
+    choice = choice or CHANNEL_SET
+    while choice not in ("all", "occipital"):
+        ans = input("Analizzare tutti i canali [a] o solo la ROI visiva estesa "
+                    f"{OCCIPITAL_CHANNELS} [o]? ").strip().lower()
+        choice = {"a": "all", "all": "all", "o": "occipital", "occipital": "occipital"}.get(ans)
+    if choice == "all":
+        return "all", None, OUT_DIR
+    chans = OCCIPITAL_CHANNELS + [CHANNEL_ALIASES[c] for c in OCCIPITAL_CHANNELS if c in CHANNEL_ALIASES]
+    return "occipital", chans, OUT_DIR / OCCIPITAL_SUBDIR
+
+
 # ---- caricamento
 FIXED_LENGTH_S = None      # solo per registrati continui: durata delle epoche (s)
 ANALYSIS_WINDOW = None     # es. (1.0, 11.0) per escludere un pre-stimolo; None = epoca intera

@@ -85,15 +85,18 @@ def plot_snr_vs_stim_freq(snr_freq, colors, out_png, out_html=None, cols=SNR_COL
         fs.write_html(out_html, include_plotlyjs=True)
 
 
-def find_results():
-    for d in (cfg.OUT_DIR, FALLBACK_DIR):
+def find_results(out_dir=None, occipital=False):
+    fallback = FALLBACK_DIR / cfg.OCCIPITAL_SUBDIR if occipital else FALLBACK_DIR
+    for d in (out_dir or cfg.OUT_DIR, fallback):
         if (d / "results.pkl").exists():
             return d
     raise SystemExit("results.pkl non trovato: lancia prima MAIN_IPS.py")
 
 
 def main():
-    out = find_results()
+    channel_set, _, out_dir = cfg.choose_channel_set()  # stessa scelta di MAIN_IPS: tutti / occipitali
+    out = find_results(out_dir, channel_set == "occipital")
+    print("Risultati letti da:", out)
     res = load_results(out / "results.pkl")
     store, long, subj, snr_freq = res["store"], res["long"], res["subj"], res["snr_freq"]
     colors = cfg.COLORS
