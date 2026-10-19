@@ -7,11 +7,16 @@ occipital ROI in syncron_results/occipital).
   figS1_kuramoto_R             R(t) example per group (median-GS subject) and distribution of R per group
   figS2_gs_metastability       GS, M, M pooled, GS and M normalized by surrogates, per band and group
   figS3_pc_plv                 mean PC, PLV and PPC over channel pairs, per band and group
-  figS4_matrix_<pc|ppc>        group-mean matrices and difference, pairs significant after FDR marked
-  figS5_topo_<pc|plv|ppc>      node strength (mean coupling with the other channels) on the scalp
-  figS6_stim_freq              GS, M and PC vs stimulation frequency, median and IQR per group
+  figS4_matrix_<pc|ppc|wpli|dwpli>   group-mean matrices and difference, pairs significant after FDR marked
+  figS5_topo_<pc|plv|ppc|wpli|dwpli|icoh>   node strength (mean coupling with the other channels)
+  figS6_stim_freq              GS, M, PC and wPLI vs stimulation frequency, median and IQR per group
   figS7_plv_time               PLV(t) across epochs (mean over pairs) from the stimulation onset
   figS8_summary_heatmap        group medians and group difference (rank-biserial r), metric x band
+  figS9_lag_insensitive        mean PLI, wPLI, debiased wPLI, imaginary coherence per band and group
+
+Interpretation: with channels rebuilt from 5 ICA components, Kuramoto GS / M, PC and PLV mostly
+reflect the instantaneous mixing (and the polarity of the topographies for R): they are read as
+a relative comparison between groups. PLI, wPLI, dwPLI and iCOH keep only the lagged coupling.
 """
 import sys
 from pathlib import Path
@@ -31,7 +36,8 @@ from photosensitive.plot_ips_avalan import _band_boxes
 from descriptive_analysis import plots, topography
 from descriptive_analysis.plots import _save, _label, _stars
 
-MEASURE_LABELS = {"pc": "phase coherence", "plv": "PLV", "ppc": "PPC"}
+MEASURE_LABELS = {"pc": "phase coherence", "plv": "PLV", "ppc": "PPC", "pli": "PLI", "wpli": "wPLI",
+                  "dwpli": "debiased wPLI", "icoh": "imaginary coherence"}
 
 
 def _groups(df):
@@ -69,7 +75,7 @@ def plot_kuramoto_R(details, metrics, bands, colors, out_png):
             ax.set_ylabel("R(t)")
             axh.set_ylabel("density")
             axh.legend(fontsize=plots.BASE_FONT - 3)
-    fig.suptitle("Kuramoto order parameter R(t) (eq. 3.15)")
+    fig.suptitle("Kuramoto order parameter R(t) (eq. 3.15); sensor level: relative comparison between groups")
     _save(fig, out_png)
 
 
@@ -114,7 +120,9 @@ def plot_matrices(mats, edges, ch_names, bands, colors, measure, out_png):
 
 def plot_stim_freq(epochs, sf_tests, bands, colors, out_png):
     """figS6: per-subject mean at each stim frequency, group median and IQR; * = p_fdr < ALPHA."""
-    cols = [("gs", "GS"), ("metastability", "metastability"), ("pc_mean", "mean PC")]
+    cols = [("gs", "GS"), ("metastability", "metastability"), ("pc_mean", "mean PC"),
+            ("wpli_mean", "mean wPLI")]
+    cols = [(c, l) for c, l in cols if c in epochs]
     subj = epochs.dropna(subset=["stim_freq"]).groupby(["group", "subject", "band", "stim_freq"])[
         [c for c, _ in cols]].mean().reset_index()
     fig, axes = plt.subplots(len(cols), len(bands), figsize=(3.8 * len(bands), 3.2 * len(cols)),
@@ -174,7 +182,9 @@ def plot_summary_heatmap(metrics, bands, colors, out_png):
     """figS8: group medians (z-scored per row) and group difference (rank-biserial r, Mann-Whitney)."""
     cols = [("gs", "GS"), ("metastability", "metastability"), ("metastability_pooled", "M pooled"),
             ("gs_norm", "GS / surrogate"), ("metastability_norm", "M / surrogate"),
-            ("pc_mean", "mean PC"), ("plv_mean", "mean PLV"), ("ppc_mean", "mean PPC")]
+            ("pc_mean", "mean PC"), ("plv_mean", "mean PLV"), ("ppc_mean", "mean PPC"),
+            ("pli_mean", "mean PLI"), ("wpli_mean", "mean wPLI"), ("dwpli_mean", "mean dwPLI"),
+            ("icoh_mean", "mean iCOH")]
     cols = [(c, l) for c, l in cols if c in metrics and metrics[c].notna().any()]
     groups = _groups(metrics)
     if len(groups) != 2:
@@ -240,16 +250,21 @@ def main():
                           ("metastability_pooled", "M pooled over epochs"),
                           ("gs_norm", "GS / surrogate GS"), ("metastability_norm", "M / surrogate M")],
                 bands, colors, out / "figS2_gs_metastability.png",
-                "Global synchrony and metastability (Kuramoto; Acebrón et al. 2005)")
+                "Global synchrony and metastability (Kuramoto; Acebrón et al. 2005) — "
+                "relative comparison, sensitive to zero-lag mixing")
     _band_boxes(metrics, [("pc_mean", "phase coherence\n(mean over pairs)"),
                           ("plv_mean", "PLV across epochs"), ("ppc_mean", "PPC (unbiased PLV²)")],
                 bands, colors, out / "figS3_pc_plv.png",
                 "Pair-wise phase synchrony (Mormann et al. 2000; Lachaux et al. 1999; Vinck et al. 2010)")
-    for m in ("pc", "ppc"):
+    _band_boxes(metrics, [("pli_mean", "PLI"), ("wpli_mean", "wPLI"), ("dwpli_mean", "debiased wPLI"),
+                          ("icoh_mean", "imaginary coherence")],
+                bands, colors, out / "figS9_lag_insensitive.png",
+                "Lag-insensitive synchrony (Nolte et al. 2004; Stam et al. 2007; Vinck et al. 2011)")
+    for m in ("pc", "ppc", "wpli", "dwpli"):
         plot_matrices(res["matrices"], res["edges"], res["ch_names"], bands, colors, m,
                       out / f"figS4_matrix_{m}.png")
     chan = res["chan"]
-    for m in ("pc", "plv", "ppc"):
+    for m in ("pc", "plv", "ppc", "wpli", "dwpli", "icoh"):
         cols = [(f"{m}_strength_{b}", f"{b}\n{MEASURE_LABELS[m]}") for b in bands
                 if f"{m}_strength_{b}" in chan]
         if cols:

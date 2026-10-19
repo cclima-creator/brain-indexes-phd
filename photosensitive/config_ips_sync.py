@@ -31,6 +31,12 @@ R_HIST_BINS = 50                  # histogram of R(t) in [0, 1], kept for the fi
 R_EXAMPLE_S = 4.0                 # seconds of R(t) of the first epoch kept for the figures
 DECIMATE_PLOT = 8                 # R(t) and PLV(t) kept for the figures every 8 samples (128 Hz)
 
+# ---- indices computed (changing this list re-analyses the cached subjects)
+# Kuramoto (GS, M), PC, PLV / PPC are sensitive to zero-lag mixing: with channels rebuilt from 5 ICA
+# components they mostly reflect the mixing, and GS / M are a relative comparison between groups.
+# PLI, wPLI, dwPLI, iCOH use only the lagged part of the coupling (synchrony_criticality/lag_insensitive.py).
+INDICES = ("kuramoto", "pc", "plv", "ppc", "pli", "wpli", "dwpli", "icoh")
+
 # ---- group statistics
 ALPHA = 0.05                      # significance for the edge-wise tests and the figures
 MIN_SUBJECTS_PER_FREQ = 3         # stim-frequency tests only with >= 3 subjects per group
@@ -48,7 +54,7 @@ def results_dir(channel_set, prelim_root):
 
 def params():
     """Parameters that change the results: if different from the cached ones, the subject is redone."""
-    return dict(BANDS=BANDS, FILTER_ORDER=FILTER_ORDER, EDGE_TRIM_S=EDGE_TRIM_S,
+    return dict(INDICES=INDICES, BANDS=BANDS, FILTER_ORDER=FILTER_ORDER, EDGE_TRIM_S=EDGE_TRIM_S,
                 N_SURROGATES=N_SURROGATES, SEED=SEED, R_HIST_BINS=R_HIST_BINS,
                 R_EXAMPLE_S=R_EXAMPLE_S, DECIMATE_PLOT=DECIMATE_PLOT,
                 FIXED_LENGTH_S=base.FIXED_LENGTH_S, ANALYSIS_WINDOW=base.ANALYSIS_WINDOW)

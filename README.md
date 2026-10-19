@@ -36,6 +36,13 @@ Generic functions in `synchrony_criticality/` (no database-specific code):
 | `kuramoto.py` | order parameter R(t), global synchrony (mean R), metastability (std R), random-phase level, circular-shift surrogates | Kuramoto 1984; Acebrón et al. 2005; Arenas et al. 2008; Shanahan 2010 |
 | `phase_coherence.py` | phase coherence matrix (time average per epoch), upper triangle, node strength | Mormann et al. 2000; Lachaux et al. 1999 |
 | `plv.py` | PLV across epochs (time-resolved and averaged), pairwise phase consistency (unbiased) | Lachaux et al. 1999; Vinck et al. 2010 |
+| `lag_insensitive.py` | PLI, weighted PLI, debiased wPLI, imaginary coherence (only the lagged part of the coupling) | Nolte et al. 2004; Stam et al. 2007; Vinck et al. 2011 |
+
+Kuramoto GS / M, PC and PLV are inflated (or, for R, cancelled by opposite polarities) by zero-lag
+mixing: volume conduction and, in the 5-component dataset, channels rebuilt from 5 ICA components.
+At sensor level they are read as a relative comparison between groups; the lag-insensitive indices
+measure coupling that the mixing cannot produce.
+
 
 Photosensitive database: `photosensitive/MAIN_IPS_SYNC.py` (analysis, per-subject cache),
 `photosensitive/plot_ips_sync.py` (figures only), settings in `photosensitive/config_ips_sync.py`.

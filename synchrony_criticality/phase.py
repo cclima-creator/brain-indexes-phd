@@ -49,13 +49,21 @@ def trim_edges(x, sfreq, trim_s):
     return x[..., n:-n]
 
 
+def band_analytic(data, sfreq, band, order=4, trim_s=1.0):
+    """
+    Band-passed analytic signal with trimmed edges. data: (n_epochs, n_channels, n_times),
+    filtered epoch by epoch. Returns z: (n_epochs, n_channels, n_times_trimmed), complex.
+    """
+    z = analytic_signal(bandpass_filter(data, sfreq, band, order))
+    return trim_edges(z, sfreq, trim_s)
+
+
 def band_phases(data, sfreq, band, order=4, trim_s=1.0):
     """
     Full pipeline for one band. data: (n_epochs, n_channels, n_times), filtered epoch by epoch.
     Returns (phases, amplitude envelope), both (n_epochs, n_channels, n_times_trimmed).
     """
-    z = analytic_signal(bandpass_filter(data, sfreq, band, order))
-    z = trim_edges(z, sfreq, trim_s)
+    z = band_analytic(data, sfreq, band, order, trim_s)
     return instantaneous_phase(z), np.abs(z)
 
 

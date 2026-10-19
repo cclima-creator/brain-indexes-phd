@@ -13,6 +13,11 @@ Pipeline per subject and band (modules in synchrony_criticality/):
   Butterworth band-pass (zero phase) -> Hilbert -> phase phi_j(t) -> 1 s edge trimming
   -> R(t) per epoch -> GS, M (+ circular-shift surrogates)
   -> PC_ij per epoch (time average) -> PLV_ij / PPC_ij across epochs (Lachaux 1999; Vinck 2010)
+  -> PLI, wPLI, debiased wPLI, imaginary coherence per epoch (only the lagged part of the coupling:
+     not inflated by zero-lag mixing of the 5 back-projected components / volume conduction)
+Kuramoto GS and M at sensor level depend on the mixing and on the polarity of the topographies
+(channels in anti-phase cancel in the mean): read them as a relative comparison between groups,
+not as absolute levels of synchrony.
 Group level: Mann-Whitney per band (FDR within band), per stimulation frequency (FDR across
 frequencies), per channel (node strength, FDR across channels) and per channel pair (FDR across pairs).
 """
@@ -38,10 +43,11 @@ from photosensitive.report import check_output_dir, save_tables_excel, save_resu
 from photosensitive.MAIN_IPS import pick_channels
 from descriptive_analysis.summary_stats import compare_groups, fdr_bh, channel_group_tests
 from descriptive_analysis.topography import ALIASES
-from synchrony_criticality.phase import band_phases, drop_flat_channels
+from synchrony_criticality.phase import band_analytic, drop_flat_channels
 from synchrony_criticality.kuramoto import kuramoto_epochs
 from synchrony_criticality.phase_coherence import phase_coherence_epochs, upper, node_strength
 from synchrony_criticality.plv import plv_summary
+from synchrony_criticality.lag_insensitive import lag_insensitive_epochs
 
 warnings.filterwarnings("ignore")
 
@@ -52,35 +58,41 @@ SHEET_ORDER = ["subject_band_metrics", "group_tests", "group_summary", "stim_fre
 # columns of the subject x band table compared between groups
 TEST_METRICS = ["gs", "metastability", "metastability_pooled", "metastability_cv", "gs_norm",
                 "metastability_norm", "R_median", "R_q95", "pc_mean", "pc_median", "plv_mean",
-                "ppc_mean"]
-EPOCH_METRICS = ["gs", "metastability", "pc_mean"]          # per epoch, tested per stim frequency
-EDGE_MEASURES = ["pc", "ppc"]                                 # pair-wise matrices tested per edge
-STRENGTH_MEASURES = ["pc", "plv", "ppc"]                      # node strength per channel
+                "ppc_mean", "pli_mean", "wpli_mean", "dwpli_mean", "icoh_mean"]
+EPOCH_METRICS = ["gs", "metastability", "pc_mean", "wpli_mean"]   # per epoch, tested per stim frequency
+LAG_MEASURES = ["pli", "wpli", "dwpli", "icoh"]               # lag-insensitive indices
+MATRIX_MEASURES = ["pc", "plv", "ppc"] + LAG_MEASURES         # pair-wise matrices kept per subject
+EDGE_MEASURES = ["pc", "ppc", "wpli", "dwpli"]                # pair-wise matrices tested per edge
+STRENGTH_MEASURES = ["pc", "plv", "ppc", "wpli", "dwpli", "icoh"]   # node strength per channel
 
 
 # ================================================================== ONE SUBJECT
 def analyze_band(data, sfreq, ch_names, labels, fstim, group, sid, band_name, band):
     """All synchrony measures for one subject in one band. Returns (row, epoch rows, channel rows, detail)."""
-    phases, _ = band_phases(data, sfreq, band, cfg.FILTER_ORDER, cfg.EDGE_TRIM_S)
+    z = band_analytic(data, sfreq, band, cfg.FILTER_ORDER, cfg.EDGE_TRIM_S)
+    phases = np.angle(z)
     n_ep, n_ch, n_t = phases.shape
 
     kur, kur_ep, R, hist = kuramoto_epochs(phases, cfg.N_SURROGATES, cfg.SEED, cfg.R_HIST_BINS)
     pc_ep = phase_coherence_epochs(phases)                    # (n_ep, n_ch, n_ch)
     pc = pc_ep.mean(0)
     pl = plv_summary(phases) if n_ep >= 2 else None
+    lag, lag_ep = lag_insensitive_epochs(z)
+    del z
 
     row = dict(group=group, subject=sid, band=band_name, n_channels=n_ch, n_epochs=n_ep,
                duration_s=n_ep * n_t / sfreq, **kur,
                pc_mean=float(upper(pc).mean()), pc_median=float(np.median(upper(pc))),
                plv_mean=float(upper(pl["plv"]).mean()) if pl else np.nan,
-               ppc_mean=float(upper(pl["ppc"]).mean()) if pl else np.nan)
+               ppc_mean=float(upper(pl["ppc"]).mean()) if pl else np.nan,
+               **{f"{m}_mean": float(upper(lag[m]).mean()) for m in LAG_MEASURES})
 
     pc_ep_mean = upper(pc_ep).mean(-1)
     epochs = [dict(group=group, subject=sid, band=band_name, epoch=k, label=labels[k],
                    stim_freq=fstim[k], gs=kur_ep["gs"][k], metastability=kur_ep["metastability"][k],
-                   pc_mean=pc_ep_mean[k]) for k in range(n_ep)]
+                   pc_mean=pc_ep_mean[k], wpli_mean=lag_ep["wpli"][k]) for k in range(n_ep)]
 
-    strength = dict(pc=node_strength(pc))
+    strength = dict(pc=node_strength(pc), **{m: node_strength(lag[m]) for m in ("wpli", "dwpli", "icoh")})
     if pl:
         strength.update(plv=node_strength(pl["plv"]), ppc=node_strength(pl["ppc"]))
     chans = [dict(group=group, subject=sid, band=band_name, channel=c,
@@ -90,7 +102,8 @@ def analyze_band(data, sfreq, ch_names, labels, fstim, group, sid, band_name, ba
     dec = cfg.DECIMATE_PLOT
     n_ex = int(cfg.R_EXAMPLE_S * sfreq)
     detail = dict(pc=pc.astype(np.float32), R_hist=hist, R_example=R[0, :n_ex:dec].astype(np.float32),
-                  R_example_sfreq=sfreq / dec, R_epoch_gs=kur_ep["gs"], R_epoch_ms=kur_ep["metastability"])
+                  R_example_sfreq=sfreq / dec, R_epoch_gs=kur_ep["gs"], R_epoch_ms=kur_ep["metastability"],
+                  **{m: lag[m].astype(np.float32) for m in LAG_MEASURES})
     if pl:
         detail.update(plv=pl["plv"].astype(np.float32), ppc=pl["ppc"].astype(np.float32),
                       plv_t=pl["plv_t"][::dec].astype(np.float32),
@@ -124,7 +137,8 @@ def analyze_subject(fpath, group, channels):
         details[band_name] = det
         print(f"    {band_name:>6}: GS {row['gs']:.3f} (surr {row.get('gs_surrogate', np.nan):.3f}) | "
               f"M {row['metastability']:.3f} | PC {row['pc_mean']:.3f} | PLV {row['plv_mean']:.3f} "
-              f"PPC {row['ppc_mean']:.3f}  ({time.time() - t0:.1f} s)")
+              f"PPC {row['ppc_mean']:.3f} | wPLI {row['wpli_mean']:.3f} dwPLI {row['dwpli_mean']:.3f}  "
+              f"({time.time() - t0:.1f} s)")
     return dict(rows=rows, epochs=epochs, chans=chans, details=details, ch_names=ch_names,
                 params=cfg.params(), sfreq=sfreq)
 
@@ -227,19 +241,19 @@ def align_channels(subjects):
             continue
         idx = [c.index(n) for n in names]
         for det in s["details"].values():
-            for m in ("pc", "plv", "ppc"):
+            for m in MATRIX_MEASURES:
                 if m in det:
                     det[m] = det[m][np.ix_(idx, idx)]
     return names
 
 
 def group_matrices(subjects):
-    """Mean PC / PLV / PPC matrix per group and band (only if the channels coincide)."""
+    """Mean matrix of every pair-wise measure per group and band (only if the channels coincide)."""
     out = {}
     for b in cfg.BANDS:
         for g in cfg.GROUPS:
             ss = [s for s in subjects if s["group"] == g]
-            for m in ("pc", "plv", "ppc"):
+            for m in MATRIX_MEASURES:
                 mats = [s["details"][b][m] for s in ss if m in s["details"][b]]
                 if mats:
                     out[(g, b, m)] = np.mean(mats, axis=0)
@@ -248,7 +262,7 @@ def group_matrices(subjects):
 
 def edge_tests(subjects, names):
     """
-    Mann-Whitney between groups on every channel pair, for PC and PPC in every band.
+    Mann-Whitney between groups on every channel pair, for EDGE_MEASURES in every band.
     p_fdr = FDR across the pairs of that band and measure. Long table, one row per pair.
     names: common channel order from align_channels.
     """
@@ -332,7 +346,7 @@ def save_sync_results(subjects, out_dir, channel_set):
               "channel_tests": chan_tests, "edge_tests": edges, "parameters": params}
     save_tables_excel(tables, out_dir / "synchrony_results.xlsx", SHEET_ORDER)
     # for the figures: per-subject details without the full matrices (they stay in the caches)
-    details = {(s["group"], s["subject"], b): {k: v for k, v in det.items() if k not in ("pc", "plv", "ppc")}
+    details = {(s["group"], s["subject"], b): {k: v for k, v in det.items() if k not in MATRIX_MEASURES}
                for s in subjects for b, det in s["details"].items()}
     save_results(dict(metrics=df, tests=tests, summary=summary, epochs=ep, stim_freq_tests=sf_tests,
                       chan=chan_wide, chan_tests=chan_tests, edges=edges, matrices=mats,

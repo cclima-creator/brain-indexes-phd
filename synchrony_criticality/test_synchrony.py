@@ -8,7 +8,8 @@ import numpy as np
 # repository root (brain-indexes-phd/) on the path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from synchrony_criticality.phase import band_phases, bandpass_filter
+from synchrony_criticality.phase import band_phases, bandpass_filter, analytic_signal
+from synchrony_criticality.lag_insensitive import lag_insensitive_matrices, lag_insensitive_epochs
 from synchrony_criticality.kuramoto import (kuramoto_order_parameter, global_synchrony, metastability,
                                             kuramoto_epochs, random_phase_R)
 from synchrony_criticality.phase_coherence import (phase_coherence_matrix, phase_coherence_loop,
@@ -95,6 +96,30 @@ def test_kuramoto_epochs_surrogates():
     assert s["gs"] > 0.8 and s["gs_norm"] > 2 and s["gs_p_surrogate"] < 0.1
     assert ep["gs"].shape == (n_ep,) and R.shape == (n_ep, n_t)
     assert np.isclose((hist["density"] * np.diff(hist["edges"])).sum(), 1)
+
+
+def _mixed_sources(lag_s, n_t=8000, seed=6):
+    """Two channels mixing two independent 10 Hz-band sources; channel 1 also gets source A delayed."""
+    rng = np.random.default_rng(seed)
+    a, b = (bandpass_filter(rng.normal(size=n_t + 200), SF, (8, 12)) for _ in range(2))
+    d = int(round(lag_s * SF))
+    ch0 = a[200:] + 0.6 * b[200:]
+    ch1 = (np.roll(a, d)[200:] if d else 0.0 * a[200:]) + 0.6 * b[200:] + 0.8 * a[200:] * (d == 0)
+    noise = 0.3 * np.vstack([bandpass_filter(rng.normal(size=n_t), SF, (8, 12)) for _ in range(2)])
+    return analytic_signal(np.vstack([ch0, ch1]) + noise)        # independent sensor noise
+
+
+def test_lag_insensitive_ignores_zero_lag_mixing():
+    z0 = _mixed_sources(0.0)                       # pure instantaneous mixing
+    zl = _mixed_sources(0.025)                     # source A reaches channel 1 after 25 ms (~pi/2 at 10 Hz)
+    m0, ml = lag_insensitive_matrices(z0), lag_insensitive_matrices(zl)
+    assert phase_coherence_matrix(np.angle(z0))[0, 1] > 0.8          # PC fooled by mixing
+    assert m0["wpli"][0, 1] < 0.1 and m0["icoh"][0, 1] < 0.05 and abs(m0["dwpli"][0, 1]) < 0.05
+    assert ml["wpli"][0, 1] > 0.7 and ml["dwpli"][0, 1] > 0.5 and ml["icoh"][0, 1] > 0.2
+    assert ml["pli"][0, 1] > m0["pli"][0, 1]
+    assert np.allclose(m0["wpli"], m0["wpli"].T) and np.all(np.diag(m0["wpli"]) == 0)
+    mats, ep = lag_insensitive_epochs(np.stack([zl, zl]))
+    assert np.allclose(mats["wpli"], ml["wpli"]) and ep["wpli"].shape == (2,)
 
 
 if __name__ == "__main__":
