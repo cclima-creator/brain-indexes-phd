@@ -53,10 +53,11 @@ THIRD_METHOD = "ols"             # 1/(sigma nu z): "ols" (Friedman 2012) o "edge
 REPERTOIRE_MIN_CHANNELS = 1      # pattern con almeno 1 canale (= tutti i non vuoti)
 REPERTOIRE_MAX_PATTERNS = 4000   # sopra, la diversita' si stima su un sottoinsieme casuale
 
-# ---- IEI robusto (avalanche_criticality/iei.py): per ora solo diagnostica, NON cambia il time bin
-# delle valanghe (che resta MAX_IEI_MS / IEI_MODE). Risultati in iei_results.xlsx / .pkl.
-RUN_AVALANCHES = True            # False: MAIN_IPS_AVALAN fa solo l'analisi dell'IEI
-RUN_IEI = True
+# ---- IEI robusto (avalanche_criticality/iei.py): ANALISI DISATTIVATA (decisione del 19/10/2026).
+# Ne sono venuti i time bin fissi per banda (BIN_SAMPLES); non va piu' ricalcolata. Il codice resta
+# in iei.py e in MAIN_IPS_AVALAN.py (load_or_run_iei, save_iei_results) solo come documentazione.
+RUN_AVALANCHES = True            # False: MAIN_IPS_AVALAN non fa le valanghe
+RUN_IEI = False                  # NON riattivare: analisi dell'IEI disattivata
 IEI_METHOD = "auto"              # "auto" = GMM -> valle dell'istogramma -> fallback
 IEI_MIN_ASHMAN_D = 2.0           # GMM accettata solo se le due gaussiane sono separate (D >= 2)
 IEI_FALLBACK_FACTOR = 5.0        # fallback: soglia = mediana x 5

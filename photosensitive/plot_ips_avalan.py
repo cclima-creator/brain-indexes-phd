@@ -13,7 +13,8 @@ Grafici delle valanghe, database IPS: legge avalanche_results.pkl prodotto da MA
   figA7_branching_ratio_bins      sigma per durata del time bin (4-18 ms), media ± SEM per gruppo
   figA8_repertoire                repertorio (pattern unici/s e per valanga) e diversita' dei pattern
   figA9_fano                      Fano factor e curva FF(W)
-  figA11_iei                      IEI medio e mediano per gruppo e banda, con test tra gruppi
+  (figA11_iei e figA12-A14 dell'IEI: disattivate)
+  figA15_distribution_table       % di valanghe nel range power law, plausibilita' e miglior modello
   figA10_summary_heatmap          mediane per gruppo e differenza (effect size) metrica x banda
 
 IEI robusto (da iei_results.pkl, se c'e'; solo diagnostica, non usato per le valanghe):
@@ -274,7 +275,7 @@ def plot_summary_heatmap(metrics, bands, colors, out_png):
     """figA10: mediane per gruppo (z-score per riga) e differenza tra gruppi (r rank-biserial)."""
     cols = [("dcc", "DCC"), ("tau", "τ"), ("alpha", "α"), ("third", "1/σνz"), ("sigma_bins", "σ"),
             ("sigma_geometric", "σ geometric"), ("repertoire_rate", "repertoire /s"),
-            ("diversity", "pattern diversity"), ("ff", "Fano factor"), ("size_decades", "size decades")]
+            ("diversity_mean", "pattern diversity"), ("ff", "Fano factor"), ("size_decades", "size decades")]
     cols = [(c, l) for c, l in cols if c in metrics]
     groups = _groups(metrics)
     if len(groups) != 2:
@@ -435,6 +436,60 @@ def plot_iei(out):
                 "Robust inter-event interval per group and band (Mann-Whitney U)")
 
 
+# ------------------------------------------------------------------ TABELLA DELLE DISTRIBUZIONI
+MODEL_SHORT = {"power_law": "PL", "truncated_power_law": "TPL", "lognormal": "LN",
+               "exponential": "Exp", "stretched_exponential": "SExp"}
+
+
+def plot_distribution_table(summ, bands, colors, out_png):
+    """
+    figA15: una tabella per le dimensioni S e una per le durate T. Righe = banda x gruppo.
+    Colonne: % di valanghe nel range power law (mediana [IQR], tratto arancio della fig. A3),
+    decadi del range, soggetti con power law plausibile (Clauset p >= 0.1), quante volte ogni
+    modello e' il migliore (confronti di Vuong), quanti con confidenza forte e quanti ambigui.
+    """
+    from matplotlib.colors import to_rgba
+    cols = (["% avalanches\nin PL range\nmedian [IQR]", "decades\n(median)", "PL plausible\n(p ≥ 0.1)"]
+            + [f"best:\n{MODEL_SHORT[m]}" for m in MODEL_SHORT] + ["strong\nconfidence", "ambiguous"])
+    fig, axes = plt.subplots(2, 1, figsize=(17, 2.2 + 0.42 * 2 * len(bands) * 2))
+    for ax, var, title in zip(axes, ("size", "duration"), ("Avalanche size S", "Avalanche duration T")):
+        ax.axis("off")
+        cells, labels, row_colors = [], [], []
+        for b in bands:
+            for g in colors:
+                d = summ[(summ.band == b) & (summ.group == g) & (summ.variable == var)]
+                if d.empty:
+                    continue
+                r = d.iloc[0]
+                n = int(r.n_subjects)
+                cells.append([f"{r.pct_in_pl_range_median:.0f}% [{r.pct_in_pl_range_q25:.0f}-{r.pct_in_pl_range_q75:.0f}]",
+                              "–" if not np.isfinite(r.decades_median) else f"{r.decades_median:.2f}",
+                              f"{int(r.n_pl_plausible)}/{n}"]
+                             + [f"{int(r[f'n_best_{m}'])}/{n}" for m in MODEL_SHORT]
+                             + [f"{int(r.n_strong)}/{n}", f"{int(r.n_ambiguous)}/{n}"])
+                labels.append(f"{b} · {_label(g)}")
+                row_colors.append(to_rgba(colors[g], 0.12))
+        tb = ax.table(cellText=cells, rowLabels=labels, colLabels=cols, loc="center", cellLoc="center")
+        tb.auto_set_font_size(False)
+        tb.set_fontsize(10)
+        tb.scale(1, 1.55)
+        for (i, j), c in tb.get_celld().items():
+            if i == 0:
+                c.set_height(c.get_height() * 2.2)
+                c.set_text_props(weight="bold")
+            elif i > 0:
+                c.set_facecolor(row_colors[i - 1])
+                if j >= 3 and j < 3 + len(MODEL_SHORT):           # evidenzia il modello piu' frequente
+                    vals = [int(x.split("/")[0]) for x in cells[i - 1][3:3 + len(MODEL_SHORT)]]
+                    if vals[j - 3] == max(vals) and max(vals) > 0:
+                        c.set_text_props(weight="bold")
+        ax.set_title(title, fontsize=plots.BASE_FONT + 1, loc="left", pad=4)
+    fig.suptitle("How the avalanche distributions are fitted: share in the power-law range and best model\n"
+                 "(PL power law, TPL truncated power law, LN lognormal, Exp exponential, SExp stretched exponential; "
+                 "Vuong / nested LR tests, p < 0.05; xmin = minimum of the data)", fontsize=plots.BASE_FONT)
+    _save(fig, out_png)
+
+
 # ------------------------------------------------------------------ MAIN
 def find_results(out_dir, name="avalanche_results.pkl"):
     for d in (out_dir, FALLBACK_DIR / cfg.OUT_SUBDIR):
@@ -447,10 +502,11 @@ def main():
     channel_set, _, out_root = base.choose_channel_set()   # stessa scelta di MAIN_IPS_AVALAN
     plots.paper_style()
     res_dir = cfg.results_dir(channel_set, out_root)
-    iei_out = find_results(res_dir, "iei_results.pkl")
-    if iei_out is not None:
-        plot_iei(iei_out)
-        print("Grafici dell'IEI salvati in:", iei_out)
+    iei_out = None                                    # figure dell'IEI (A12-A14) disattivate
+    # iei_out = find_results(res_dir, "iei_results.pkl")
+    # if iei_out is not None:
+    #     plot_iei(iei_out)
+    #     print("Grafici dell'IEI salvati in:", iei_out)
     out = find_results(res_dir)
     if out is None:
         if iei_out is None:
@@ -481,14 +537,17 @@ def main():
     plot_branching_bins(br, bands, colors, out / "figA7_branching_ratio_bins.png", res.get("br_tests"))
     _band_boxes(metrics, [("repertoire_rate", "unique patterns / s"),
                           ("repertoire_per_avalanche", "unique / avalanches"),
-                          ("diversity", "pattern diversity\n(median Hamming)")],
+                          ("diversity_mean", "pattern diversity\n(mean Hamming)")],
                 bands, colors, out / "figA8_repertoire.png",
                 "Avalanche repertoire (Sorrentino et al. 2021; Maschke et al. 2024)")
     plot_fano(details, metrics, bands, colors, out / "figA9_fano.png")
-    iei_cols = [(c, l) for c, l in (("mean_iei_ms", "mean IEI (ms)"), ("median_iei_ms", "median IEI (ms)"))
-                if c in metrics]
-    _band_boxes(metrics, iei_cols, bands, colors, out / "figA11_iei.png",
-                "Inter-event interval per group and band (Mann-Whitney U)")
+    # figA11 (IEI medio e mediano per gruppo e banda) disattivata: analisi dell'IEI non piu' usata
+    # iei_cols = [(c, l) for c, l in (("mean_iei_ms", "mean IEI (ms)"), ("median_iei_ms", "median IEI (ms)"))
+    #             if c in metrics]
+    # _band_boxes(metrics, iei_cols, bands, colors, out / "figA11_iei.png",
+    #             "Inter-event interval per group and band (Mann-Whitney U)")
+    if res.get("dist_summary") is not None and len(res["dist_summary"]):
+        plot_distribution_table(res["dist_summary"], bands, colors, out / "figA15_distribution_table.png")
     plot_summary_heatmap(metrics, bands, colors, out / "figA10_summary_heatmap.png")
     print("\nGrafici salvati in:", out)
 

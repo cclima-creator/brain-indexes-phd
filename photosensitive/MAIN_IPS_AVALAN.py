@@ -47,26 +47,28 @@ from descriptive_analysis.summary_stats import compare_groups, fdr_bh
 from descriptive_analysis.plots import amplitude_deviation_from_gaussian
 from avalanche_criticality.binarization import (zscore_channels, zscore_histogram, binarize,
                                                 avalanches_from_epochs, divergence_threshold)
-from avalanche_criticality.iei import robust_iei
+# from avalanche_criticality.iei import robust_iei    # analisi dell'IEI disattivata (config: RUN_IEI)
 from avalanche_criticality.branching_ratio import branching_ratio, branching_ratio_sweep
-from avalanche_criticality.power_law import avalanche_criticality
+from avalanche_criticality.power_law import avalanche_criticality, compare_all_distributions, MODELS
 from avalanche_criticality.repertoire import repertoire, shared_repertoire
 from avalanche_criticality.fano_factor import fano_factor, fano_curve
 
 warnings.filterwarnings("ignore")
 
-OUTPUT_NAMES = ["avalanche_results.xlsx", "avalanche_results.pkl", "iei_results.xlsx", "iei_results.pkl"]
-SHEET_ORDER = ["subject_band_metrics", "group_tests", "group_summary", "threshold_divergence",
+OUTPUT_NAMES = ["avalanche_results.xlsx", "avalanche_results.pkl"]   # (iei_results.*: analisi IEI disattivata)
+SHEET_ORDER = ["subject_band_metrics", "group_tests", "group_summary", "distribution_summary",
+               "distribution_fit", "threshold_divergence",
                "branching_ratio_bin_tests",
                "branching_ratio_bins", "power_law_cutoff_scan", "shared_repertoire", "parameters"]
 
 # colonne della tabella per soggetto x banda che vengono confrontate tra gruppi
-TEST_METRICS = ["mean_iei_ms", "median_iei_ms", "n_avalanches", "avalanche_rate_hz", "mean_size", "mean_duration_bins",
+TEST_METRICS = ["n_avalanches",                    # (mean/median_iei_ms tolti: analisi IEI disattivata)
+                 "avalanche_rate_hz", "mean_size", "mean_duration_bins",
                 "tau", "alpha", "third", "dcc", "dcc_clauset", "dcc_range", "tau_range", "alpha_range",
                 "size_xmax_cutoff", "size_decades", "duration_xmax_cutoff", "duration_decades",
                 "size_p_gof", "duration_p_gof", "size_mse", "duration_mse",
                 "sigma_bins", "sigma_geometric", "sigma_ancestors",
-                "repertoire_rate", "repertoire_per_avalanche", "diversity", "ff", "ff_beta"]
+                "repertoire_rate", "repertoire_per_avalanche", "diversity_mean", "ff", "ff_beta"]
 
 IEI_SHEET_ORDER = ["iei_subject_band", "iei_group_tests", "iei_group_summary", "iei_bimodality",
                    "parameters"]
@@ -116,7 +118,7 @@ def analyze_band(data, sfreq, group, sid, band_name, band):
                n_channels=av["n_channels"], duration_s=av["duration_s"],
                n_events=av["n_events"], n_avalanches=len(sizes),
                avalanche_rate_hz=len(sizes) / av["duration_s"],
-               mean_iei_ms=1000 * av["mean_iei_s"], median_iei_ms=1000 * av["median_iei_s"],
+               # mean_iei_ms / median_iei_ms: analisi dell'IEI disattivata
                mean_size=float(sizes.mean()) if sizes.size else np.nan,
                max_size=int(sizes.max()) if sizes.size else 0,
                mean_duration_bins=float(durs.mean()) if durs.size else np.nan,
@@ -195,6 +197,7 @@ def iei_band(x, sfreq, threshold):
     z = zscore_channels(x)
     z = z[:, np.isfinite(z).all(axis=(0, 2))]
     events = [binarize(zk, threshold, cfg.EVENT_MODE, cfg.THRESH_TYPE).sum(0) for zk in z]
+    from avalanche_criticality.iei import robust_iei    # solo se RUN_IEI viene riattivato
     return robust_iei(events, sfreq, cfg.IEI_METHOD, cfg.IEI_FALLBACK_FACTOR, cfg.IEI_MIN_ASHMAN_D,
                       cfg.IEI_DEQUANTIZE, smooth_bins=cfg.IEI_SMOOTH_BINS)
 
@@ -425,6 +428,54 @@ def branching_bin_tests(br):
     return pd.DataFrame(rows)
 
 
+def distribution_tables(subjects, out_dir):
+    """
+    Per ogni soggetto, banda e variabile (S, T):
+      - percentuale di valanghe nel range in cui la power law regge (tratto arancio della fig. A3:
+        n_range / n; 0 se nessun range regge) e decadi del range
+      - power law plausibile (p di Clauset >= 0.1)
+      - miglior modello tra power law, troncata, lognormale, esponenziale, esponenziale stirata e
+        confidenza (power_law.compare_all_distributions)
+    I confronti sono salvati in distribution_cache.pkl (chiave: soggetto, banda, variabile, parametri):
+    rilanciando si ricalcolano solo quelli nuovi.
+    Ritorna (tabella per soggetto, riassunto per banda x gruppo x variabile).
+    """
+    cache_path = out_dir / "distribution_cache.pkl"
+    cache = load_results(cache_path) if cache_path.exists() else {}
+    key_par = repr(sorted(cfg.params().items()))
+    rows = []
+    for s in subjects:
+        for b, det in s["details"].items():
+            for var, xs in (("size", det["sizes"]), ("duration", det["durations"])):
+                f = det[f"{var}_fit"]
+                key = (s["subject"], b, var, key_par)
+                if key not in cache:
+                    cache[key] = compare_all_distributions(xs, cfg.XMIN)
+                c = cache[key]
+                n = len(xs)
+                rows.append(dict(
+                    group=s["group"], subject=s["subject"], band=b, variable=var, n_avalanches=n,
+                    pct_in_pl_range=100 * f.get("n_range", 0) / n if n else np.nan,
+                    range_xmin=f.get("range_xmin"), xmax_cutoff=f.get("xmax_cutoff"),
+                    decades=f.get("decades"), p_gof=f.get("p_gof"), pl_plausible=bool(f.get("plausible")),
+                    best_model=c["best"], confidence=c["confidence"], tpl_cutoff=c.get("tpl_cutoff"),
+                    **{k: v for k, v in c.items() if k.startswith(("R_", "p_"))}))
+    save_results(cache, cache_path)
+    fit = pd.DataFrame(rows)
+    summ = []
+    for (b, g, var), d in fit.groupby(["band", "group", "variable"], sort=False):
+        pct = d.pct_in_pl_range
+        row = dict(band=b, group=g, variable=var, n_subjects=len(d),
+                   pct_in_pl_range_median=pct.median(), pct_in_pl_range_q25=pct.quantile(.25),
+                   pct_in_pl_range_q75=pct.quantile(.75), decades_median=d.decades.median(),
+                   n_pl_plausible=int(d.pl_plausible.sum()), n_strong=int((d.confidence == "strong").sum()))
+        for m in MODELS:
+            row[f"n_best_{m}"] = int((d.best_model == m).sum())
+        row["n_ambiguous"] = int((d.confidence == "ambiguous").sum())
+        summ.append(row)
+    return fit, pd.DataFrame(summ)
+
+
 def shared_patterns(subjects):
     """Pattern condivisi tra i due gruppi in ogni banda (Sorrentino 2021), se i canali coincidono."""
     if len({tuple(s["ch_names"]) for s in subjects}) != 1:
@@ -452,7 +503,8 @@ def main():
     cache_dir = out_dir / "subjects"
     cache_dir.mkdir(exist_ok=True)
     iei_cache_dir = out_dir / "subjects_iei"
-    iei_cache_dir.mkdir(exist_ok=True)
+    if cfg.RUN_IEI:                                   # analisi dell'IEI disattivata (config)
+        iei_cache_dir.mkdir(exist_ok=True)
     print("Cartella di output:", out_dir)
     print(f"Soglie (SD): {cfg.THRESHOLD_SD} | IEI {cfg.BIN_SAMPLES if cfg.IEI_MODE == 'per_band' else str(cfg.MAX_IEI_MS) + ' ms'}{' campioni' if cfg.IEI_MODE == 'per_band' else ''} | eventi '{cfg.EVENT_MODE}' | "
           f"bootstrap {cfg.N_BOOT}")
@@ -485,7 +537,9 @@ def save_avalanche_results(subjects, out_dir, out_root, channel_set):
     """Tabelle di gruppo, soglie, Excel e avalanche_results.pkl delle valanghe."""
 
     df = pd.DataFrame([r for s in subjects for r in s["rows"]])
+    df = df.drop(columns=["mean_iei_ms", "median_iei_ms"], errors="ignore")   # IEI disattivata (cache vecchie)
     tests, summary = group_tables(df)
+    dist_fit, dist_summary = distribution_tables(subjects, out_dir)
     br_long, scan = long_tables(subjects)
     br_tests = branching_bin_tests(br_long)
     div_rows, div_curves = band_divergence(subjects)
@@ -505,14 +559,15 @@ def save_avalanche_results(subjects, out_dir, out_root, channel_set):
     params = pd.DataFrame([dict(parameter=k, value=str(v)) for k, v in cfg.params().items()])
     tables = {"subject_band_metrics": df, "group_tests": tests, "group_summary": summary,
               "threshold_divergence": divergence, "branching_ratio_bins": br_long, "branching_ratio_bin_tests": br_tests,
-              "power_law_cutoff_scan": scan, "shared_repertoire": shared, "parameters": params}
+              "power_law_cutoff_scan": scan, "shared_repertoire": shared,
+              "distribution_summary": dist_summary, "distribution_fit": dist_fit, "parameters": params}
     save_tables_excel(tables, out_dir / "avalanche_results.xlsx", SHEET_ORDER)
     # per i grafici: tutto tranne i pattern (restano nelle cache per soggetto)
     details = {(s["group"], s["subject"], b): {k: v for k, v in det.items()
                                                if k not in ("unique_patterns", "pattern_counts")}
                for s in subjects for b, det in s["details"].items()}
     save_results(dict(metrics=df, tests=tests, summary=summary, details=details, br=br_long,
-                      br_tests=br_tests,
+                      br_tests=br_tests, dist_fit=dist_fit, dist_summary=dist_summary,
                       scan=scan, divergence=divergence, divergence_curves=div_curves,
                       shared=shared, params=cfg.params(), channel_set=channel_set,
                       bands=dict(cfg.BANDS)),

@@ -53,7 +53,7 @@ import numpy as np
 from scipy import stats
 from scipy.optimize import minimize_scalar
 from scipy.integrate import trapezoid
-from scipy.special import zeta
+from scipy.special import erfc, zeta
 
 try:
     import powerlaw
@@ -356,6 +356,18 @@ def loglog_gof(x, a, xmin, xmax=None, discrete=True, n_bins=20):
 LR_ALTERNATIVES = ("exponential", "lognormal", "stretched_exponential")   # (+ truncated_power_law, sotto)
 
 
+def _tpl_norm(a, lam, xmin, k_exact=10_000):
+    """Z = sum_{k >= xmin} k^-a e^(-lambda k): somma esatta fino a xmin + k_exact, poi integrale in log."""
+    k = np.arange(xmin, xmin + k_exact, dtype=float)
+    z = np.sum(np.exp(-a * np.log(k) - lam * k))
+    k0 = xmin + k_exact - 0.5
+    end = k0 + 50 / lam
+    if end > k0 + 1:
+        kk = np.geomspace(k0, end, 2000)
+        z += trapezoid(np.exp(-a * np.log(kk) - lam * kk), kk)
+    return z
+
+
 def fit_truncated_power_law(x, xmin, k_exact=10_000):
     """
     Power law con taglio esponenziale, discreta, per x >= xmin (MLE):
@@ -368,20 +380,12 @@ def fit_truncated_power_law(x, xmin, k_exact=10_000):
     from scipy.optimize import minimize
     t = _tail(x, xmin)
     n, sum_log, s = t.size, np.log(t).sum(), t.sum()
-    k = np.arange(xmin, xmin + k_exact, dtype=float)
-    logk = np.log(k)
-    k0 = xmin + k_exact - 0.5
 
     def nll(p):
         a, lam = p[0], np.exp(p[1])
         if not 0 <= a <= 8:                           # stesso dominio dell'esponente della power law
             return np.inf
-        z = np.sum(np.exp(-a * logk - lam * k))
-        end = k0 + 50 / lam
-        if end > k0 + 1:
-            kk = np.geomspace(k0, end, 2000)
-            z += trapezoid(np.exp(-a * np.log(kk) - lam * kk), kk)
-        return a * sum_log + lam * s + n * np.log(z)
+        return a * sum_log + lam * s + n * np.log(_tpl_norm(a, lam, xmin, k_exact))
 
     a0 = mle_alpha(t, xmin, None, True)[0]
     best = None
@@ -445,6 +449,108 @@ def best_distribution(lr):
         if np.isfinite(R) and R < worst and p < 0.05:
             worst, best = R, alt
     return best
+
+
+MODELS = ("power_law", "truncated_power_law", "lognormal", "exponential", "stretched_exponential")
+N_PARAMS = {"power_law": 1, "exponential": 1, "truncated_power_law": 2, "lognormal": 2,
+            "stretched_exponential": 2}
+# coppie annidate (modello semplice, modello che lo contiene): power law = troncata con lambda = 0;
+# esponenziale = troncata con esponente 0 = esponenziale stirata con beta = 1
+NESTED = {("power_law", "truncated_power_law"), ("exponential", "truncated_power_law"),
+          ("exponential", "stretched_exponential")}
+
+
+def _vuong(l1, l2):
+    """Rapporto di verosimiglianza normalizzato di Vuong (Clauset 2009, sez. 5): (R, p)."""
+    d = l1 - l2
+    n, sd = d.size, d.std()
+    if n < 2 or sd == 0:
+        return 0.0, 1.0
+    R = d.sum() / (np.sqrt(n) * sd)
+    return float(R), float(erfc(abs(R) / np.sqrt(2)))
+
+
+def compare_all_distributions(x, xmin="min", discrete=True, alpha=0.05):
+    """
+    Quale distribuzione descrive meglio i dati (x >= xmin): power law, power law troncata
+    (taglio esponenziale), lognormale, esponenziale, esponenziale stirata. Stessi modelli di
+    edgeofpy.fit_powerlaw / Maschke 2024 e di Clauset 2009 (sez. 5).
+
+    - Ogni modello e' fittato con la massima verosimiglianza sugli stessi dati (power law e troncata
+      con le funzioni di questo modulo, le altre con il pacchetto powerlaw).
+    - Ogni coppia e' confrontata con il rapporto di verosimiglianza normalizzato di Vuong: R > 0 =
+      il primo modello spiega meglio i dati, p = significativita' del segno di R. Unica eccezione:
+      power law contro troncata (modelli annidati) usa il test del rapporto di verosimiglianza con
+      chi2 a 1 grado di liberta'. Lo stesso per le altre coppie annidate (NESTED): esponenziale contro
+      troncata e contro esponenziale stirata. Per modelli annidati il test di Vuong non e' adatto.
+    - Un modello "vince" contro un altro se R va nella sua direzione con p < alpha.
+    - Miglior modello: tra quelli che non perdono contro nessuno, quello con meno parametri
+      (parsimonia: se il modello piu' grande non migliora in modo significativo si tiene il piu'
+      semplice), poi quello che ne batte di piu', poi la somma degli R.
+    - Confidenza: "strong" = batte in modo significativo tutti gli altri modelli, esclusi quelli che
+      lo contengono e non lo migliorano (che non si possono "battere" per costruzione);
+      "moderate" = non perde contro nessuno ma almeno un modello alternativo non e' distinguibile;
+      "ambiguous" = ogni modello perde contro almeno un altro (vince la somma degli R).
+    - equivalent: altri modelli che non perdono contro nessuno (non distinguibili dal migliore).
+
+    Ritorna dict con best, confidence, n_wins, wins (modello -> vittorie), R_<a>_vs_<b>, p_<a>_vs_<b>,
+    tpl_cutoff (1/lambda), n.
+    """
+    x = np.asarray(x, dtype=float)
+    x = x[np.isfinite(x) & (x > 0)]
+    xm = float(x.min()) if (isinstance(xmin, str) and xmin == "min") else float(xmin)
+    t = _tail(x, xm)
+    out = dict(best="n.a.", confidence="n.a.", n=int(t.size), tpl_cutoff=np.nan)
+    if t.size < 30 or np.unique(t).size < 3 or not HAVE_POWERLAW:
+        return out
+    ll = {}
+    a, _, _ = mle_alpha(t, xm, None, discrete)
+    ll["power_law"] = -a * np.log(t) - np.log(_norm(a, xm, None, discrete))
+    ta, tl, _ = fit_truncated_power_law(t, xm)
+    if np.isfinite(tl):
+        ll["truncated_power_law"] = -ta * np.log(t) - tl * t - np.log(_tpl_norm(ta, tl, xm))
+        out["tpl_cutoff"] = 1 / tl if tl > 0 else np.inf
+    with warnings.catch_warnings(), np.errstate(all="ignore"):
+        warnings.simplefilter("ignore")
+        fit = powerlaw.Fit(t, xmin=xm, discrete=discrete, verbose=False)
+        for m in ("lognormal", "exponential", "stretched_exponential"):
+            try:
+                v = np.asarray(getattr(fit, m).loglikelihoods(t), dtype=float)
+                if np.all(np.isfinite(v)):
+                    ll[m] = v
+            except Exception:
+                pass
+    models = [m for m in MODELS if m in ll]
+    wins = {m: set() for m in models}
+    score = {m: 0.0 for m in models}
+    for i, m1 in enumerate(models):
+        for m2 in models[i + 1:]:
+            pair = (m1, m2) if (m1, m2) in NESTED else (m2, m1) if (m2, m1) in NESTED else None
+            if pair:                                  # annidati: test LR con chi2 a 1 gdl
+                simple, big = pair
+                Rs = min(ll[simple].sum() - ll[big].sum(), 0.0)
+                p = float(stats.chi2.sf(-2 * Rs, 1))
+                R = Rs if m1 == simple else -Rs
+            else:
+                R, p = _vuong(ll[m1], ll[m2])
+            out[f"R_{m1}_vs_{m2}"], out[f"p_{m1}_vs_{m2}"] = R, p
+            score[m1] += R
+            score[m2] -= R
+            if p < alpha and R != 0:
+                (wins[m1] if R > 0 else wins[m2]).add(m2 if R > 0 else m1)
+    lost = {m: any(m in wins[o] for o in models if o != m) for m in models}
+    unbeaten = [m for m in models if not lost[m]]
+    if unbeaten:
+        best = min(unbeaten, key=lambda m: (N_PARAMS[m], -len(wins[m]), -score[m]))
+        supersets = {big for simple, big in NESTED if simple == best}
+        required = set(models) - {best} - supersets
+        conf = "strong" if required <= wins[best] else "moderate"
+        equivalent = sorted(m for m in unbeaten if m != best)
+    else:
+        best, conf, equivalent = max(models, key=lambda m: score[m]), "ambiguous", []
+    out.update(best=best, confidence=conf, n_wins=len(wins[best]), equivalent=equivalent,
+               wins={m: sorted(w) for m, w in wins.items()})
+    return out
 
 
 # ================================================================== FIT COMPLETO
