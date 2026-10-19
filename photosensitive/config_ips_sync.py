@@ -1,0 +1,54 @@
+# -*- coding: utf-8 -*-
+"""
+Settings of the synchronization analysis on the IPS database (MAIN_IPS_SYNC.py / plot_ips_sync.py).
+Paths, groups, colors and channel choice come from config_ips.py (same data as the preliminary
+and avalanche analyses); only the synchrony parameters are here. For another database: copy this file.
+"""
+from pathlib import Path
+
+from photosensitive import config_ips as base
+
+GROUPS = base.GROUPS
+COLORS = base.COLORS
+OUT_SUBDIR = "synchrony"         # used only if OUT_ROOT = None: results in OUT_DIR/synchrony
+# results folder, next to criticality_results: OUT_ROOT (all channels) or OUT_ROOT/occipital
+# (visual ROI). None = inside the preliminary-analysis folder (OUT_DIR/synchrony)
+OUT_ROOT = Path(r"C:\Users\Chiara Clima\Desktop\eeg preprocess criticality\syncron_results")
+
+# ---- bands: only narrow bands (the Hilbert phase is meaningful for narrow-band signals, so no
+# broadband here, unlike the avalanches)
+BANDS = dict(base.BANDS)          # delta 1-4, theta 4-8, alpha 8-13, beta 13-30, gamma 30-45 Hz
+
+# ---- phase extraction (synchrony_criticality/phase.py)
+FILTER_ORDER = 4                  # Butterworth order (doubled by the forward-backward filtering)
+EDGE_TRIM_S = 1.0                 # seconds removed at both ends of each epoch after Hilbert
+                                  # (12 s epochs -> 10 s analysed; 1 s = 1 cycle at 1 Hz)
+
+# ---- Kuramoto (synchrony_criticality/kuramoto.py)
+N_SURROGATES = 20                 # circular-shift surrogates per subject and band (0 = none)
+SEED = 0
+R_HIST_BINS = 50                  # histogram of R(t) in [0, 1], kept for the figures
+R_EXAMPLE_S = 4.0                 # seconds of R(t) of the first epoch kept for the figures
+DECIMATE_PLOT = 8                 # R(t) and PLV(t) kept for the figures every 8 samples (128 Hz)
+
+# ---- group statistics
+ALPHA = 0.05                      # significance for the edge-wise tests and the figures
+MIN_SUBJECTS_PER_FREQ = 3         # stim-frequency tests only with >= 3 subjects per group
+
+# ---- per-subject cache: if it exists with the same parameters it is not recomputed
+OVERWRITE = False
+
+
+def results_dir(channel_set, prelim_root):
+    """Results folder: OUT_ROOT (or OUT_ROOT/occipital), or prelim_root/OUT_SUBDIR."""
+    if OUT_ROOT is None:
+        return Path(prelim_root) / OUT_SUBDIR
+    return OUT_ROOT if channel_set == "all" else OUT_ROOT / base.OCCIPITAL_SUBDIR
+
+
+def params():
+    """Parameters that change the results: if different from the cached ones, the subject is redone."""
+    return dict(BANDS=BANDS, FILTER_ORDER=FILTER_ORDER, EDGE_TRIM_S=EDGE_TRIM_S,
+                N_SURROGATES=N_SURROGATES, SEED=SEED, R_HIST_BINS=R_HIST_BINS,
+                R_EXAMPLE_S=R_EXAMPLE_S, DECIMATE_PLOT=DECIMATE_PLOT,
+                FIXED_LENGTH_S=base.FIXED_LENGTH_S, ANALYSIS_WINDOW=base.ANALYSIS_WINDOW)

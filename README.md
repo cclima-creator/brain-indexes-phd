@@ -28,6 +28,20 @@ per-subject cache), `photosensitive/plot_ips_avalan.py` (figures only), settings
 - Global synchrony (Kuramoto mean)
 - Metastability (Kuramoto variance)
 
+Generic functions in `synchrony_criticality/` (no database-specific code):
+
+| module | content | references |
+|---|---|---|
+| `phase.py` | zero-phase Butterworth band-pass (sos), Hilbert analytic signal, instantaneous phase, edge trimming | Le Van Quyen et al. 2001; Lachaux et al. 1999 |
+| `kuramoto.py` | order parameter R(t), global synchrony (mean R), metastability (std R), random-phase level, circular-shift surrogates | Kuramoto 1984; Acebrón et al. 2005; Arenas et al. 2008; Shanahan 2010 |
+| `phase_coherence.py` | phase coherence matrix (time average per epoch), upper triangle, node strength | Mormann et al. 2000; Lachaux et al. 1999 |
+| `plv.py` | PLV across epochs (time-resolved and averaged), pairwise phase consistency (unbiased) | Lachaux et al. 1999; Vinck et al. 2010 |
+
+Photosensitive database: `photosensitive/MAIN_IPS_SYNC.py` (analysis, per-subject cache),
+`photosensitive/plot_ips_sync.py` (figures only), settings in `photosensitive/config_ips_sync.py`.
+Results in `syncron_results` next to `criticality_results` (`syncron_results/occipital` for the visual ROI).
+Tests: `python synchrony_criticality/test_synchrony.py`.
+
 ## 3. Edge of Chaos
 - 0–1 chaos test
 - Lyapunov exponent
