@@ -13,6 +13,7 @@ Grafici delle valanghe, database IPS: legge avalanche_results.pkl prodotto da MA
   figA7_branching_ratio_bins      sigma per durata del time bin (4-18 ms), media ± SEM per gruppo
   figA8_repertoire                repertorio (pattern unici/s e per valanga) e diversita' dei pattern
   figA9_fano                      Fano factor e curva FF(W)
+  figA11_iei                      IEI medio e mediano per gruppo e banda, con test tra gruppi
   figA10_summary_heatmap          mediane per gruppo e differenza (effect size) metrica x banda
 """
 import sys
@@ -211,8 +212,11 @@ def plot_scaling(details, metrics, bands, colors, out_png):
     _save(fig, out_png)
 
 
-def plot_branching_bins(br, bands, colors, out_png):
-    """figA7: sigma (stimatore 'bins' sopra, 'geometric' sotto) per durata del time bin, media ± SEM."""
+def plot_branching_bins(br, bands, colors, out_png, br_tests=None):
+    """
+    figA7: sigma (stimatore 'bins' sopra, 'geometric' sotto) per durata del time bin, media ± SEM.
+    Asterischi sopra ogni bin: Mann-Whitney tra gruppi, FDR sui time bin (br_tests di MAIN_IPS_AVALAN).
+    """
     fig, axes = plt.subplots(2, len(bands), figsize=(3.3 * len(bands), 6.4), squeeze=False, sharex=True)
     for j, b in enumerate(bands):
         for i, col in enumerate(("sigma_bins", "sigma_geometric")):
@@ -223,6 +227,14 @@ def plot_branching_bins(br, bands, colors, out_png):
                 ax.errorbar(m.index, m.values, yerr=s.values, color=cfg.COLORS[g], marker="o", ms=4,
                             capsize=2, label=_label(g))
             ax.axhline(1, color="k", ls="--", lw=1)
+            if br_tests is not None and len(br_tests):
+                t = br_tests[(br_tests.band == b) & (br_tests.estimator == col)]
+                d = br[br.band == b].groupby(["bin_ms", "group"])[col]
+                top = (d.mean() + d.std() / np.sqrt(d.count())).groupby("bin_ms").max()
+                for ms, q in zip(t.bin_ms, t.p_fdr):
+                    star = _stars(q).replace("n.s.", "")
+                    if star and ms in top.index:
+                        ax.text(ms, top[ms], star, ha="center", va="bottom", fontsize=plots.BASE_FONT - 4)
             if i == 0:
                 ax.set_title(b)
             else:
@@ -230,7 +242,8 @@ def plot_branching_bins(br, bands, colors, out_png):
         axes[0, 0].set_ylabel("σ (Beggs & Plenz)")
         axes[1, 0].set_ylabel("σ (Sorrentino, geometric)")
     axes[0, 0].legend(fontsize=plots.BASE_FONT - 3)
-    fig.suptitle("Branching ratio vs time bin (mean ± SEM across subjects)")
+    fig.suptitle("Branching ratio vs time bin (mean ± SEM across subjects; "
+                 "* p_fdr < 0.05, Mann-Whitney, FDR over time bins)")
     _save(fig, out_png)
 
 
@@ -332,13 +345,17 @@ def main():
                           ("duration_p_gof", "p power law (T)"), ("duration_mse", "MSE log-log (T)")],
                 bands, colors, out / "figA6_powerlaw_quality.png",
                 "How power-law are the distributions (Clauset p, range in decades, cutoff, MSE)")
-    plot_branching_bins(br, bands, colors, out / "figA7_branching_ratio_bins.png")
+    plot_branching_bins(br, bands, colors, out / "figA7_branching_ratio_bins.png", res.get("br_tests"))
     _band_boxes(metrics, [("repertoire_rate", "unique patterns / s"),
                           ("repertoire_per_avalanche", "unique / avalanches"),
                           ("diversity", "pattern diversity\n(median Hamming)")],
                 bands, colors, out / "figA8_repertoire.png",
                 "Avalanche repertoire (Sorrentino et al. 2021; Maschke et al. 2024)")
     plot_fano(details, metrics, bands, colors, out / "figA9_fano.png")
+    iei_cols = [(c, l) for c, l in (("mean_iei_ms", "mean IEI (ms)"), ("median_iei_ms", "median IEI (ms)"))
+                if c in metrics]
+    _band_boxes(metrics, iei_cols, bands, colors, out / "figA11_iei.png",
+                "Inter-event interval per group and band (Mann-Whitney U)")
     plot_summary_heatmap(metrics, bands, colors, out / "figA10_summary_heatmap.png")
     print("\nGrafici salvati in:", out)
 

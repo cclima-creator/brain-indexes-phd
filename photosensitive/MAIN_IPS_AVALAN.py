@@ -22,6 +22,7 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+from scipy import stats
 
 # cartella principale del repository (brain-indexes-phd/) nel path, come in MAIN_IPS.py
 ROOT = Path(__file__).resolve().parents[1]
@@ -36,7 +37,7 @@ from photosensitive.io_eeg import discover_files, load_epochs, get_data_uv
 from photosensitive.report import (check_output_dir, save_tables_excel, save_results, load_results,
                                    FALLBACK_DIR)
 from photosensitive.MAIN_IPS import pick_channels
-from descriptive_analysis.summary_stats import compare_groups
+from descriptive_analysis.summary_stats import compare_groups, fdr_bh
 from descriptive_analysis.plots import amplitude_deviation_from_gaussian
 from avalanche_criticality.binarization import (zscore_channels, zscore_histogram,
                                                 avalanches_from_epochs, divergence_threshold)
@@ -49,10 +50,11 @@ warnings.filterwarnings("ignore")
 
 OUTPUT_NAMES = ["avalanche_results.xlsx", "avalanche_results.pkl"]
 SHEET_ORDER = ["subject_band_metrics", "group_tests", "group_summary", "threshold_divergence",
+               "branching_ratio_bin_tests",
                "branching_ratio_bins", "power_law_cutoff_scan", "shared_repertoire", "parameters"]
 
 # colonne della tabella per soggetto x banda che vengono confrontate tra gruppi
-TEST_METRICS = ["n_avalanches", "avalanche_rate_hz", "mean_size", "mean_duration_bins",
+TEST_METRICS = ["mean_iei_ms", "median_iei_ms", "n_avalanches", "avalanche_rate_hz", "mean_size", "mean_duration_bins",
                 "tau", "alpha", "third", "dcc", "dcc_clauset", "dcc_range", "tau_range", "alpha_range",
                 "size_xmax_cutoff", "size_decades", "duration_xmax_cutoff", "duration_decades",
                 "size_p_gof", "duration_p_gof", "size_mse", "duration_mse",
@@ -98,7 +100,7 @@ def analyze_band(data, sfreq, group, sid, band_name, band):
                n_channels=av["n_channels"], duration_s=av["duration_s"],
                n_events=av["n_events"], n_avalanches=len(sizes),
                avalanche_rate_hz=len(sizes) / av["duration_s"],
-               mean_iei_ms=1000 * av["mean_iei_s"],
+               mean_iei_ms=1000 * av["mean_iei_s"], median_iei_ms=1000 * av["median_iei_s"],
                mean_size=float(sizes.mean()) if sizes.size else np.nan,
                max_size=int(sizes.max()) if sizes.size else 0,
                mean_duration_bins=float(durs.mean()) if durs.size else np.nan,
@@ -253,6 +255,31 @@ def long_tables(subjects):
     return pd.DataFrame(br), pd.DataFrame(scan)
 
 
+def branching_bin_tests(br):
+    """
+    sigma tra gruppi per ogni banda, stimatore e time bin: Mann-Whitney U.
+    p_fdr = FDR (Benjamini-Hochberg) sui time bin di quella banda e quello stimatore.
+    """
+    groups = [g for g in cfg.GROUPS if g in set(br.group)]
+    if len(groups) != 2:
+        return pd.DataFrame()
+    rows = []
+    for b in cfg.BANDS:
+        for est in ("sigma_bins", "sigma_geometric", "sigma_ancestors"):
+            part = []
+            for ms, d in br[br.band == b].groupby("bin_ms"):
+                x = [d.loc[d.group == g, est].dropna().values for g in groups]
+                if min(len(v) for v in x) < 2:
+                    continue
+                part.append(dict(band=b, estimator=est, bin_ms=ms, p=stats.mannwhitneyu(*x).pvalue,
+                                 **{f"median_{g}": float(np.median(v)) for g, v in zip(groups, x)}))
+            if part:
+                for r, q in zip(part, fdr_bh(np.array([r["p"] for r in part]))):
+                    r["p_fdr"] = q
+                rows += part
+    return pd.DataFrame(rows)
+
+
 def shared_patterns(subjects):
     """Pattern condivisi tra i due gruppi in ogni banda (Sorrentino 2021), se i canali coincidono."""
     if len({tuple(s["ch_names"]) for s in subjects}) != 1:
@@ -301,6 +328,7 @@ def main():
     df = pd.DataFrame([r for s in subjects for r in s["rows"]])
     tests, summary = group_tables(df)
     br_long, scan = long_tables(subjects)
+    br_tests = branching_bin_tests(br_long)
     div_rows, div_curves = band_divergence(subjects)
     prelim = preliminary_divergence(out_root)
     divergence = pd.DataFrame(prelim + div_rows)
@@ -317,7 +345,7 @@ def main():
 
     params = pd.DataFrame([dict(parameter=k, value=str(v)) for k, v in cfg.params().items()])
     tables = {"subject_band_metrics": df, "group_tests": tests, "group_summary": summary,
-              "threshold_divergence": divergence, "branching_ratio_bins": br_long,
+              "threshold_divergence": divergence, "branching_ratio_bins": br_long, "branching_ratio_bin_tests": br_tests,
               "power_law_cutoff_scan": scan, "shared_repertoire": shared, "parameters": params}
     save_tables_excel(tables, out_dir / "avalanche_results.xlsx", SHEET_ORDER)
     # per i grafici: tutto tranne i pattern (restano nelle cache per soggetto)
@@ -325,6 +353,7 @@ def main():
                                                if k not in ("unique_patterns", "pattern_counts")}
                for s in subjects for b, det in s["details"].items()}
     save_results(dict(metrics=df, tests=tests, summary=summary, details=details, br=br_long,
+                      br_tests=br_tests,
                       scan=scan, divergence=divergence, divergence_curves=div_curves,
                       shared=shared, params=cfg.params(), channel_set=channel_set,
                       bands=dict(cfg.BANDS)),

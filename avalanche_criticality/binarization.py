@@ -145,19 +145,22 @@ def detect_avalanches(events, sfreq, max_iei_s=0.008, drop_edges=True):
           profile       : eventi per time bin (n eventi in ogni bin successivo, lunghezza dur_bin)
           pattern       : bool (n_channels,), canali con almeno un evento (Sorrentino 2021)
       events_per_sample : eventi totali per campione (somma sui canali)
-      info : dict con bin_len (campioni), mean_iei_s (IEI medio tra eventi successivi)
+      info : dict con bin_len (campioni), mean_iei_s (IEI medio tra eventi successivi),
+             iei_s (tutti gli intervalli tra istanti con eventi successivi, in s)
     """
     events = np.asarray(events)
     n_ch, n_t = events.shape
     bin_len = max(1, int(round(max_iei_s * sfreq)))
     per_sample = events.sum(0)
     idx = np.flatnonzero(per_sample)
-    info = dict(bin_len=bin_len, mean_iei_s=np.nan, n_events=int(per_sample.sum()))
+    info = dict(bin_len=bin_len, mean_iei_s=np.nan, n_events=int(per_sample.sum()),
+                iei_s=np.array([]))
     if idx.size == 0:
         return [], per_sample, info
     iei = np.diff(idx)
     if iei.size:
         info["mean_iei_s"] = float(iei.mean() / sfreq)
+        info["iei_s"] = iei / sfreq
     breaks = np.flatnonzero(iei > bin_len)
     starts = np.r_[idx[0], idx[breaks + 1]]
     ends = np.r_[idx[breaks], idx[-1]]
@@ -194,7 +197,8 @@ def avalanches_from_epochs(data, sfreq, threshold, max_iei_s=0.008, mode="peak",
       avalanches : tutte le valanghe (con chiave 'epoch' in piu')
       sizes, durations, patterns : array (vedi avalanche_arrays)
       events     : lista, per epoca, degli eventi per campione (somma sui canali), per BR e Fano
-      n_events, mean_iei_s, bin_len, n_samples, duration_s, threshold
+      n_events, mean_iei_s (media delle medie per epoca), median_iei_s (mediana di tutti gli
+      intervalli), bin_len, n_samples, duration_s, threshold
     """
     data = np.asarray(data, dtype=float)
     if data.ndim == 2:
@@ -203,7 +207,7 @@ def avalanches_from_epochs(data, sfreq, threshold, max_iei_s=0.008, mode="peak",
         z = zscore_channels(data)
     keep = np.isfinite(z).all(axis=(0, 2))           # scarta canali piatti
     z = z[:, keep]
-    avs, ev_list, ieis, n_events = [], [], [], 0
+    avs, ev_list, ieis, all_iei, n_events = [], [], [], [], 0
     for k, zk in enumerate(z):
         ev = binarize(zk, threshold, mode, thresh_type)
         a, per_sample, info = detect_avalanches(ev, sfreq, max_iei_s)
@@ -218,9 +222,12 @@ def avalanches_from_epochs(data, sfreq, threshold, max_iei_s=0.008, mode="peak",
         n_events += info["n_events"]
         if np.isfinite(info["mean_iei_s"]):
             ieis.append(info["mean_iei_s"])
+        all_iei.append(info["iei_s"])
     sizes, durs, patterns = avalanche_arrays(avs)
     n_samples = int(data.shape[0] * data.shape[2])
     return dict(avalanches=avs, sizes=sizes, durations=durs, patterns=patterns, events=ev_list,
                 n_events=n_events, mean_iei_s=float(np.mean(ieis)) if ieis else np.nan,
+                median_iei_s=(float(np.median(np.concatenate(all_iei)))
+                              if any(len(i) for i in all_iei) else np.nan),
                 bin_len=max(1, int(round(max_iei_s * sfreq))), n_samples=n_samples,
                 duration_s=n_samples / sfreq, threshold=threshold, n_channels=int(keep.sum()))

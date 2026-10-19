@@ -33,7 +33,7 @@ MAX_IEI_MS = 8.0                 # inter-event interval = time bin delle valangh
 IEI_MODE = "fixed"               # "fixed": MAX_IEI_MS per tutti (Maschke 2024)
                                  # "mean_iei": per ogni soggetto e banda, l'IEI medio tra eventi successivi
                                  # (Beggs & Plenz 2003; cambia molto tra le bande: ~4 ms gamma, ~70 ms delta)
-BR_BINS_MS = (4, 6, 8, 10, 12, 14, 16, 18)   # sensibilita' del branching ratio (analisi preliminare)
+BR_BINS_MS = (4, 6, 8, 10, 12, 14, 16, 18, 20, 22, 25, 28, 30, 35)   # sensibilita' del branching ratio
 
 # ---- power law (Clauset 2009)
 XMIN = "min"                     # xmin di tau/alpha/DCC: "min" = minimo dei dati (edgeofpy, Maschke 2024);
