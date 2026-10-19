@@ -17,8 +17,9 @@ OUT_ROOT = Path(r"C:\Users\Chiara Clima\Desktop\eeg preprocess criticality\criti
 
 # ---- binarizzazione (Maschke et al. 2024; Shriki et al. 2013)
 # soglia in SD dal punto in cui la distribuzione degli z-score si stacca dalla gaussiana
-# (analisi preliminare, fig8). Un numero per gruppo, oppure un dict {banda: soglia} per gruppo.
-THRESHOLD_SD = {"photosensitive": 1.5, "not_photosensitive": 2.0}
+# (fig. A1, broadband 5 componenti: 1.72 fotosensibili, 1.85 non fotosensibili).
+# Un numero per gruppo, oppure un dict {banda: soglia} per gruppo.
+THRESHOLD_SD = {"photosensitive": 1.7, "not_photosensitive": 1.9}
 EVENT_MODE = "peak"              # "peak": un evento al picco di ogni escursione (Maschke/edgeofpy)
                                  # "excursion": ogni campione oltre soglia (Sorrentino 2021)
 THRESH_TYPE = "both"             # escursioni positive e negative (|z| > soglia)
