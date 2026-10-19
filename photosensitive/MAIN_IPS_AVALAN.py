@@ -13,6 +13,12 @@ Pipeline per soggetto e banda (moduli in avalanche_criticality/):
   filtro passa-banda -> z-score per canale -> eventi oltre ±soglia SD (soglia del gruppo)
   -> valanghe (IEI 8 ms) -> tau, alpha, 1/(sigma nu z), DCC, cutoff -> branching ratio (+ 4-18 ms)
   -> repertorio e diversita' dei pattern -> Fano factor
+
+IEI robusto (avalanche_criticality/iei.py), per ora solo diagnostica (non cambia il time bin):
+  stessi eventi -> intervalli tra eventi consecutivi -> log10 -> GMM / valle / fallback
+  -> soglia intra/inter-valanga -> IEI medio intra. Cache in subjects_iei/, risultati in
+  iei_results.xlsx / iei_results.pkl (grafici figA12-figA14 di plot_ips_avalan.py).
+  RUN_AVALANCHES / RUN_IEI in config_ips_avalan.py scelgono quali analisi fare.
 """
 import pickle
 import sys
@@ -39,8 +45,9 @@ from photosensitive.report import (check_output_dir, save_tables_excel, save_res
 from photosensitive.MAIN_IPS import pick_channels
 from descriptive_analysis.summary_stats import compare_groups, fdr_bh
 from descriptive_analysis.plots import amplitude_deviation_from_gaussian
-from avalanche_criticality.binarization import (zscore_channels, zscore_histogram,
+from avalanche_criticality.binarization import (zscore_channels, zscore_histogram, binarize,
                                                 avalanches_from_epochs, divergence_threshold)
+from avalanche_criticality.iei import robust_iei
 from avalanche_criticality.branching_ratio import branching_ratio, branching_ratio_sweep
 from avalanche_criticality.power_law import avalanche_criticality
 from avalanche_criticality.repertoire import repertoire, shared_repertoire
@@ -48,7 +55,7 @@ from avalanche_criticality.fano_factor import fano_factor, fano_curve
 
 warnings.filterwarnings("ignore")
 
-OUTPUT_NAMES = ["avalanche_results.xlsx", "avalanche_results.pkl"]
+OUTPUT_NAMES = ["avalanche_results.xlsx", "avalanche_results.pkl", "iei_results.xlsx", "iei_results.pkl"]
 SHEET_ORDER = ["subject_band_metrics", "group_tests", "group_summary", "threshold_divergence",
                "branching_ratio_bin_tests",
                "branching_ratio_bins", "power_law_cutoff_scan", "shared_repertoire", "parameters"]
@@ -60,6 +67,13 @@ TEST_METRICS = ["mean_iei_ms", "median_iei_ms", "n_avalanches", "avalanche_rate_
                 "size_p_gof", "duration_p_gof", "size_mse", "duration_mse",
                 "sigma_bins", "sigma_geometric", "sigma_ancestors",
                 "repertoire_rate", "repertoire_per_avalanche", "diversity", "ff", "ff_beta"]
+
+IEI_SHEET_ORDER = ["iei_subject_band", "iei_group_tests", "iei_group_summary", "iei_bimodality",
+                   "parameters"]
+IEI_TEST_METRICS = ["iei_mean_ms", "threshold_ms", "intra_median_ms", "inter_median_ms",
+                    "gmm_intra_peak_ms", "gmm_inter_peak_ms", "gmm_intra_sd_dex", "gmm_inter_sd_dex",
+                    "gmm_intra_weight", "ashman_d", "frac_intra", "frac_zero", "median_all_ms",
+                    "mean_all_ms", "iei_mean_with_zero_ms"]
 
 
 # ================================================================== UN SOGGETTO
@@ -91,6 +105,8 @@ def analyze_band(data, sfreq, group, sid, band_name, band):
     zc, zd = zscore_histogram(z)
     thr = cfg.threshold_for(group, band_name)
     iei_s = cfg.MAX_IEI_MS / 1000
+    if cfg.IEI_MODE == "per_band":
+        iei_s = cfg.BIN_SAMPLES[band_name] / sfreq    # bin per banda, uguale per tutti i soggetti
     av = avalanches_from_epochs(x, sfreq, thr, iei_s, cfg.EVENT_MODE, cfg.THRESH_TYPE, z=z)
     if cfg.IEI_MODE == "mean_iei" and np.isfinite(av["mean_iei_s"]):
         iei_s = av["mean_iei_s"]                      # l'IEI medio non dipende dal bin: secondo passaggio
@@ -171,6 +187,135 @@ def load_or_run(fpath, group, channels, cache_dir):
     with open(cache, "wb") as f:
         pickle.dump(res, f)
     return res
+
+
+# ================================================================== IEI ROBUSTO (solo diagnostica)
+def iei_band(x, sfreq, threshold):
+    """Eventi come in avalanches_from_epochs (z-score su tutte le epoche, canali piatti esclusi) -> robust_iei."""
+    z = zscore_channels(x)
+    z = z[:, np.isfinite(z).all(axis=(0, 2))]
+    events = [binarize(zk, threshold, cfg.EVENT_MODE, cfg.THRESH_TYPE).sum(0) for zk in z]
+    return robust_iei(events, sfreq, cfg.IEI_METHOD, cfg.IEI_FALLBACK_FACTOR, cfg.IEI_MIN_ASHMAN_D,
+                      cfg.IEI_DEQUANTIZE, smooth_bins=cfg.IEI_SMOOTH_BINS)
+
+
+def _iei_row(r, group, sid, band, thr):
+    """Riga della tabella per soggetto x banda (tempi in ms; SD delle gaussiane in decadi)."""
+    g, intra, inter = r["gmm"], r["intra_s"], r["inter_s"]
+    n, n_all = intra.size + inter.size, r["n_intervals"] + r["n_zero"]
+    med = lambda v: 1000 * float(np.median(v)) if v.size else np.nan
+    return dict(group=group, subject=sid, band=band, threshold_sd=thr, method=r["method"],
+                iei_mean_ms=1000 * r["iei_mean_s"], threshold_ms=1000 * r["threshold_s"],
+                threshold_gmm_ms=1000 * r["threshold_gmm_s"],
+                threshold_valley_ms=1000 * r["threshold_valley_s"],
+                threshold_fallback_ms=1000 * r["threshold_fallback_s"],
+                intra_median_ms=med(intra), inter_median_ms=med(inter),
+                inter_mean_ms=1000 * float(inter.mean()) if inter.size else np.nan,
+                n_intervals=r["n_intervals"], n_intra=int(intra.size), n_inter=int(inter.size),
+                frac_intra=intra.size / n if n else np.nan,
+                frac_zero=r["n_zero"] / n_all if n_all else np.nan,
+                iei_mean_with_zero_ms=1000 * r["iei_mean_with_zero_s"],
+                median_all_ms=1000 * r["median_s"], mean_all_ms=1000 * r["mean_all_s"],
+                gmm_intra_peak_ms=1000 * 10 ** g["means"][0], gmm_inter_peak_ms=1000 * 10 ** g["means"][1],
+                gmm_intra_sd_dex=g["sds"][0], gmm_inter_sd_dex=g["sds"][1],
+                gmm_intra_weight=g["weights"][0], ashman_d=g["ashman_d"], delta_bic=g["bic1"] - g["bic2"],
+                bimodal=bool(g["ashman_d"] >= cfg.IEI_MIN_ASHMAN_D),
+                valley_found=bool(np.isfinite(r["threshold_valley_s"])))
+
+
+def analyze_subject_iei(fpath, group, channels):
+    """IEI robusto di un soggetto in ogni banda. Ritorna dict(rows, details, params, sfreq)."""
+    ep = load_epochs(fpath, base.FIXED_LENGTH_S, base.ANALYSIS_WINDOW)
+    if channels is not None:
+        ep = pick_channels(ep, channels, base.OCCIPITAL_CHANNELS)
+    sfreq = ep.info["sfreq"]
+    data = get_data_uv(ep)
+    rows, details = [], {}
+    for band_name, band in cfg.BANDS.items():
+        thr = cfg.threshold_for(group, band_name)
+        r = iei_band(band_filter(data, sfreq, band), sfreq, thr)
+        row = _iei_row(r, group, fpath.stem, band_name, thr)
+        rows.append(row)
+        # per i grafici: istogramma log, curva smussata, GMM e soglie (non gli intervalli, troppo grandi)
+        details[band_name] = dict(
+            centers=r["valley"]["centers"], density=r["valley"]["density"], smooth=r["valley"]["smooth"],
+            gmm={k: r["gmm"][k] for k in ("weights", "means", "sds", "ashman_d", "bic1", "bic2")},
+            **{k: r[k] for k in ("method", "iei_mean_s", "threshold_s", "threshold_gmm_s",
+                                 "threshold_valley_s", "threshold_fallback_s")})
+        print(f"    IEI {band_name:>10}: {row['method']:>8} | soglia {row['threshold_ms']:7.1f} ms | "
+              f"IEI intra {row['iei_mean_ms']:6.1f} ms | D {row['ashman_d']:.2f} | "
+              f"intra {100 * row['frac_intra']:.0f}%")
+    return dict(rows=rows, details=details, params=cfg.iei_params(), sfreq=sfreq)
+
+
+def load_or_run_iei(fpath, group, channels, cache_dir):
+    """Come load_or_run, per l'IEI (cache separata: non tocca quella delle valanghe)."""
+    cache = cache_dir / f"{fpath.stem}.pkl"
+    if cache.exists() and not cfg.OVERWRITE:
+        res = load_results(cache)
+        if res.get("params") == cfg.iei_params():
+            print("    IEI: letto dalla cache")
+            return res
+    res = analyze_subject_iei(fpath, group, channels)
+    with open(cache, "wb") as f:
+        pickle.dump(res, f)
+    return res
+
+
+def iei_tables(df):
+    """
+    Test tra gruppi per banda (Mann-Whitney, FDR dentro ogni banda), statistiche per gruppo e
+    bimodalita': soggetti con GMM separata (D >= IEI_MIN_ASHMAN_D), con valle, metodo usato;
+    test esatto di Fisher sulla proporzione di soggetti bimodali tra i due gruppi.
+    """
+    tests, summ, bim = [], [], []
+    metrics = [m for m in IEI_TEST_METRICS if m in df.columns]
+    groups = [g for g in cfg.GROUPS if g in set(df.group)]
+    for b in cfg.BANDS:
+        d = df[df.band == b]
+        t = compare_groups(d, metrics)
+        if len(t):
+            t.insert(0, "band", b)
+            tests.append(t)
+        s = d.groupby("group")[metrics].agg(["median", "mean", "std", "count"])
+        s.columns = [f"{m}_{a}" for m, a in s.columns]
+        summ.append(s.reset_index().assign(band=b))
+        row = dict(band=b)
+        for g in groups:
+            dg = d[d.group == g]
+            row[f"n_{g}"] = len(dg)
+            row[f"n_bimodal_{g}"] = int(dg.bimodal.sum())
+            row[f"n_valley_{g}"] = int(dg.valley_found.sum())
+            for m in ("gmm", "valley", "fallback"):
+                row[f"method_{m}_{g}"] = int((dg.method == m).sum())
+        if len(groups) == 2:
+            table = [[row[f"n_bimodal_{g}"], row[f"n_{g}"] - row[f"n_bimodal_{g}"]] for g in groups]
+            row["fisher_p_bimodal"] = stats.fisher_exact(table).pvalue
+        bim.append(row)
+    tests = pd.concat(tests, ignore_index=True) if tests else pd.DataFrame()
+    summ = pd.concat(summ, ignore_index=True) if summ else pd.DataFrame()
+    return tests, summ, pd.DataFrame(bim)
+
+
+def save_iei_results(iei_subjects, out_dir, channel_set):
+    """Tabelle dell'IEI robusto: iei_results.xlsx e iei_results.pkl (per plot_ips_avalan.py)."""
+    df = pd.DataFrame([r for s in iei_subjects for r in s["rows"]])
+    tests, summary, bimodality = iei_tables(df)
+    print(f"\n=== IEI robusto: soggetti bimodali (GMM, D >= {cfg.IEI_MIN_ASHMAN_D:g}) e metodo usato ===")
+    print(bimodality.round(4).to_string(index=False))
+    if len(tests):
+        print("\n=== IEI: test tra gruppi (Mann-Whitney, p_fdr dentro ogni banda), solo p < 0.05 ===")
+        sig = tests[tests.p < 0.05]
+        print(sig.round(4).to_string(index=False) if len(sig) else "nessuno")
+    params = pd.DataFrame([dict(parameter=k, value=str(v)) for k, v in cfg.iei_params().items()])
+    save_tables_excel({"iei_subject_band": df, "iei_group_tests": tests, "iei_group_summary": summary,
+                       "iei_bimodality": bimodality, "parameters": params},
+                      out_dir / "iei_results.xlsx", IEI_SHEET_ORDER)
+    details = {(s["group"], s["subject"], b): det for s in iei_subjects for b, det in s["details"].items()}
+    save_results(dict(metrics=df, tests=tests, summary=summary, bimodality=bimodality, details=details,
+                      params=cfg.iei_params(), channel_set=channel_set, bands=dict(cfg.BANDS)),
+                 out_dir / "iei_results.pkl")
+    print("IEI: iei_results.xlsx e iei_results.pkl in:", out_dir)
 
 
 # ================================================================== SOGLIE
@@ -306,24 +451,38 @@ def main():
     out_dir = check_output_dir(cfg.results_dir(channel_set, out_root), OUTPUT_NAMES, fallback / cfg.OUT_SUBDIR)
     cache_dir = out_dir / "subjects"
     cache_dir.mkdir(exist_ok=True)
+    iei_cache_dir = out_dir / "subjects_iei"
+    iei_cache_dir.mkdir(exist_ok=True)
     print("Cartella di output:", out_dir)
-    print(f"Soglie (SD): {cfg.THRESHOLD_SD} | IEI {cfg.MAX_IEI_MS} ms | eventi '{cfg.EVENT_MODE}' | "
+    print(f"Soglie (SD): {cfg.THRESHOLD_SD} | IEI {cfg.BIN_SAMPLES if cfg.IEI_MODE == 'per_band' else str(cfg.MAX_IEI_MS) + ' ms'}{' campioni' if cfg.IEI_MODE == 'per_band' else ''} | eventi '{cfg.EVENT_MODE}' | "
           f"bootstrap {cfg.N_BOOT}")
 
-    subjects, t_start = [], time.time()
+    subjects, iei_subjects, t_start = [], [], time.time()
     for group, folder in cfg.GROUPS.items():
         files = base.subject_files(group, discover_files(folder))
         print(f"{group}: {len(files)} file")
         for fpath in files:
             print("  ", fpath.name)
             try:
-                res = load_or_run(fpath, group, channels, cache_dir)
-                subjects.append(dict(group=group, subject=fpath.stem, **res))
+                if cfg.RUN_AVALANCHES:
+                    res = load_or_run(fpath, group, channels, cache_dir)
+                    subjects.append(dict(group=group, subject=fpath.stem, **res))
+                if cfg.RUN_IEI:
+                    res = load_or_run_iei(fpath, group, channels, iei_cache_dir)
+                    iei_subjects.append(dict(group=group, subject=fpath.stem, **res))
             except Exception as e:
                 print("    ERRORE ->", e)
-    if not subjects:
+    if not subjects and not iei_subjects:
         raise SystemExit("Nessun file analizzato: controlla i percorsi in config_ips.py")
     print(f"\nAnalisi: {(time.time() - t_start) / 60:.1f} min")
+    if iei_subjects:
+        save_iei_results(iei_subjects, out_dir, channel_set)
+    if subjects:
+        save_avalanche_results(subjects, out_dir, out_root, channel_set)
+
+
+def save_avalanche_results(subjects, out_dir, out_root, channel_set):
+    """Tabelle di gruppo, soglie, Excel e avalanche_results.pkl delle valanghe."""
 
     df = pd.DataFrame([r for s in subjects for r in s["rows"]])
     tests, summary = group_tables(df)

@@ -15,6 +15,11 @@ Grafici delle valanghe, database IPS: legge avalanche_results.pkl prodotto da MA
   figA9_fano                      Fano factor e curva FF(W)
   figA11_iei                      IEI medio e mediano per gruppo e banda, con test tra gruppi
   figA10_summary_heatmap          mediane per gruppo e differenza (effect size) metrica x banda
+
+IEI robusto (da iei_results.pkl, se c'e'; solo diagnostica, non usato per le valanghe):
+  figA12_iei_subjects_<banda>     istogramma log10 IEI di ogni soggetto, GMM a 2 componenti, soglie
+  figA13_iei_groups               distribuzione media per gruppo (± SEM), soglia e IEI intra mediani
+  figA14_iei_group_stats          IEI intra, soglia, picchi GMM, Ashman's D, frazione intra per gruppo
 """
 import sys
 from pathlib import Path
@@ -312,17 +317,145 @@ def plot_summary_heatmap(metrics, bands, colors, out_png):
     _save(fig, out_png)
 
 
+# ------------------------------------------------------------------ IEI ROBUSTO
+def _gauss_dex(x_log, w, mu, sd):
+    """Componente della GMM in densita' per decade (stesse unita' dell'istogramma del log10 IEI)."""
+    return w * stats.norm.pdf(x_log, mu, sd)
+
+
+def _iei_vlines(ax, det, label=False):
+    """Soglia usata (nera), soglie GMM / valle / fallback (tratteggiate) e IEI medio intra (verde)."""
+    styles = (("threshold_gmm_s", "tab:purple", "--", "GMM crossing"),
+              ("threshold_valley_s", "tab:orange", "--", "valley"),
+              ("threshold_fallback_s", "0.5", ":", "median × 5"))
+    for k, c, ls, lab in styles:
+        if np.isfinite(det[k]):
+            ax.axvline(1000 * det[k], color=c, ls=ls, lw=1, label=lab if label else None)
+    ax.axvline(1000 * det["threshold_s"], color="k", lw=1.5, label="threshold used" if label else None)
+    if np.isfinite(det["iei_mean_s"]):
+        ax.axvline(1000 * det["iei_mean_s"], color="tab:green", lw=1.5,
+                   label="mean intra IEI" if label else None)
+
+
+def plot_iei_subjects(details, metrics, band, colors, out_png):
+    """
+    figA12: per ogni soggetto, istogramma del log10 IEI (tutti i canali), curva smussata, le due
+    gaussiane della GMM (intra/inter) e le soglie. Zona grigia = intervalli intra-valanga.
+    """
+    items = sorted([(k, v) for k, v in details.items() if k[2] == band and k[0] in colors],
+                   key=lambda kv: (list(colors).index(kv[0][0]), kv[0][1]))
+    if not items:
+        return
+    m = metrics[metrics.band == band].set_index("subject")
+    fig, axes = _grid(len(items), ncols=6, h=2.9, w=3.6)
+    for i, ((g, sid, _), det) in enumerate(items):
+        ax = axes[i]
+        x = 1000 * 10 ** det["centers"]
+        h = (det["centers"][1] - det["centers"][0]) / 2
+        edges = 1000 * 10 ** np.r_[det["centers"] - h, det["centers"][-1] + h]
+        ax.stairs(det["density"], edges, fill=True, color=colors[g], alpha=0.35)
+        ax.plot(x, det["smooth"], color=colors[g], lw=1.2)
+        gm = det["gmm"]
+        if np.all(np.isfinite(gm["means"])):
+            comps = [_gauss_dex(det["centers"], w, mu, sd)
+                     for w, mu, sd in zip(gm["weights"], gm["means"], gm["sds"])]
+            ax.plot(x, comps[0], color="tab:purple", lw=1, label="GMM intra" if i == 0 else None)
+            ax.plot(x, comps[1], color="tab:brown", lw=1, label="GMM inter" if i == 0 else None)
+        ax.axvspan(x[0], 1000 * det["threshold_s"], color="0.85", zorder=0)
+        _iei_vlines(ax, det, label=i == 0)
+        ax.set_xscale("log")
+        ax.set_xlim(0.5, 1e4)
+        r = m.loc[sid] if sid in m.index else None
+        txt = (f"{det['method']}, D = {gm['ashman_d']:.1f}\nthr {1000 * det['threshold_s']:.0f} ms, "
+               f"IEI {1000 * det['iei_mean_s']:.1f} ms")
+        if r is not None:
+            txt += f"\nintra {100 * r['frac_intra']:.0f}%"
+        ax.text(0.97, 0.97, txt, transform=ax.transAxes, ha="right", va="top", fontsize=plots.BASE_FONT - 6)
+        ax.set_title(f"{sid[:14]} ({_label(g)[:9]})", fontsize=plots.BASE_FONT - 5, color=colors[g])
+        if i % 6 == 0:
+            ax.set_ylabel("density / decade")
+        ax.set_xlabel("IEI (ms)", fontsize=plots.BASE_FONT - 4)
+    axes[0].legend(fontsize=plots.BASE_FONT - 7, loc="center right")
+    fig.suptitle(f"{band}: inter-event intervals (all channels), log10 histogram, 2-component GMM "
+                 "and intra/inter-avalanche threshold (grey = intra)")
+    _save(fig, out_png)
+
+
+def plot_iei_groups(details, metrics, bands, colors, out_png):
+    """
+    figA13: distribuzione del log10 IEI per gruppo (media ± SEM delle densita' dei soggetti) in ogni
+    banda; linee verticali = mediana della soglia e dell'IEI medio intra del gruppo.
+    Sotto: proporzione di soggetti bimodali (GMM D >= IEI_MIN_ASHMAN_D) per gruppo.
+    """
+    fig, axes = plt.subplots(1, len(bands), figsize=(3.6 * len(bands), 4.0), squeeze=False, sharey=True)
+    for j, b in enumerate(bands):
+        ax = axes[0, j]
+        lines = []
+        for g in colors:
+            dens = [det["density"] for (gg, _, bb), det in details.items() if gg == g and bb == b]
+            if not dens:
+                continue
+            c = next(det["centers"] for (gg, _, bb), det in details.items() if gg == g and bb == b)
+            dens = np.vstack(dens)
+            mu, se = dens.mean(0), dens.std(0, ddof=1) / np.sqrt(len(dens)) if len(dens) > 1 else 0 * dens[0]
+            x = 1000 * 10 ** c
+            ax.fill_between(x, mu - se, mu + se, color=colors[g], alpha=0.25, lw=0)
+            ax.plot(x, mu, color=colors[g], lw=1.5, label=f"{_label(g)} (n={len(dens)})")
+            d = metrics[(metrics.band == b) & (metrics.group == g)]
+            ax.axvline(d.threshold_ms.median(), color=colors[g], ls="--", lw=1.2)
+            ax.axvline(d.iei_mean_ms.median(), color=colors[g], ls=":", lw=1.5)
+            lines.append(f"{_label(g)[:10]}: bimodal {int(d.bimodal.sum())}/{len(d)}, "
+                         f"thr {d.threshold_ms.median():.0f} ms")
+        ax.text(0.03, 0.97, "\n".join(lines), transform=ax.transAxes, va="top", fontsize=plots.BASE_FONT - 6)
+        ax.set_xscale("log")
+        ax.set(xlim=(0.5, 1e4), title=b, xlabel="IEI (ms)")
+    axes[0, 0].set_ylabel("density / decade")
+    axes[0, 0].legend(fontsize=plots.BASE_FONT - 5, loc="center left")
+    fig.suptitle("Inter-event interval distribution per group (mean ± SEM; dashed = median threshold, "
+                 "dotted = median intra-avalanche IEI)")
+    _save(fig, out_png)
+
+
+def plot_iei(out):
+    """figA12-figA14 da iei_results.pkl (MAIN_IPS_AVALAN con RUN_IEI = True)."""
+    res = load_results(out / "iei_results.pkl")
+    metrics, details = res["metrics"], res["details"]
+    bands = list(res["bands"])
+    colors = {g: c for g, c in cfg.COLORS.items() if g in set(metrics.group)}
+    for b in bands:
+        plot_iei_subjects(details, metrics, b, colors, out / f"figA12_iei_subjects_{b}.png")
+    plot_iei_groups(details, metrics, bands, colors, out / "figA13_iei_groups.png")
+    _band_boxes(metrics, [("iei_mean_ms", "intra-avalanche\nmean IEI (ms)"),
+                          ("threshold_ms", "intra/inter\nthreshold (ms)"),
+                          ("gmm_intra_peak_ms", "GMM intra peak (ms)"),
+                          ("gmm_inter_peak_ms", "GMM inter peak (ms)"),
+                          ("ashman_d", "Ashman's D\n(> 2 separated)"),
+                          ("frac_intra", "fraction of\nintra intervals")],
+                bands, colors, out / "figA14_iei_group_stats.png",
+                "Robust inter-event interval per group and band (Mann-Whitney U)")
+
+
 # ------------------------------------------------------------------ MAIN
-def find_results(out_dir):
+def find_results(out_dir, name="avalanche_results.pkl"):
     for d in (out_dir, FALLBACK_DIR / cfg.OUT_SUBDIR):
-        if (Path(d) / "avalanche_results.pkl").exists():
+        if (Path(d) / name).exists():
             return Path(d)
-    raise SystemExit("avalanche_results.pkl non trovato: lancia prima MAIN_IPS_AVALAN.py")
+    return None
 
 
 def main():
     channel_set, _, out_root = base.choose_channel_set()   # stessa scelta di MAIN_IPS_AVALAN
-    out = find_results(cfg.results_dir(channel_set, out_root))
+    plots.paper_style()
+    res_dir = cfg.results_dir(channel_set, out_root)
+    iei_out = find_results(res_dir, "iei_results.pkl")
+    if iei_out is not None:
+        plot_iei(iei_out)
+        print("Grafici dell'IEI salvati in:", iei_out)
+    out = find_results(res_dir)
+    if out is None:
+        if iei_out is None:
+            raise SystemExit("avalanche_results.pkl / iei_results.pkl non trovati: lancia prima MAIN_IPS_AVALAN.py")
+        return
     print("Risultati letti da:", out)
     res = load_results(out / "avalanche_results.pkl")
     metrics, details, br = res["metrics"], res["details"], res["br"]
