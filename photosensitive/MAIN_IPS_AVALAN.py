@@ -276,7 +276,7 @@ def main():
     channel_set, channels, out_root = base.choose_channel_set()
     print(f"Canali: {'tutti i canali EEG' if channels is None else base.OCCIPITAL_CHANNELS}")
     fallback = FALLBACK_DIR if channels is None else FALLBACK_DIR / base.OCCIPITAL_SUBDIR
-    out_dir = check_output_dir(Path(out_root) / cfg.OUT_SUBDIR, OUTPUT_NAMES, fallback / cfg.OUT_SUBDIR)
+    out_dir = check_output_dir(cfg.results_dir(channel_set, out_root), OUTPUT_NAMES, fallback / cfg.OUT_SUBDIR)
     cache_dir = out_dir / "subjects"
     cache_dir.mkdir(exist_ok=True)
     print("Cartella di output:", out_dir)
@@ -285,7 +285,7 @@ def main():
 
     subjects, t_start = [], time.time()
     for group, folder in cfg.GROUPS.items():
-        files = discover_files(folder)
+        files = base.subject_files(group, discover_files(folder))
         print(f"{group}: {len(files)} file")
         for fpath in files:
             print("  ", fpath.name)

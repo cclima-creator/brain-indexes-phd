@@ -1,7 +1,8 @@
 # -*- coding: utf-8 -*-
 """
 Grafici delle valanghe, database IPS: legge avalanche_results.pkl prodotto da MAIN_IPS_AVALAN.py
-(nessun ricalcolo dell'analisi). Figure in OUT_DIR/avalanches (o OUT_DIR/occipital/avalanches).
+(nessun ricalcolo dell'analisi). Figure nella cartella di config_ips_avalan.OUT_ROOT
+(criticality_results; la ROI occipitale in criticality_results/occipital).
 
   figA1_threshold_divergence      z-score per banda vs gaussiana di fit, punto di divergenza e soglia usata
   figA2_ccdf_sizes_durations      CCDF di dimensioni e durate, ogni soggetto, per banda
@@ -23,17 +24,26 @@ if str(ROOT) not in sys.path:
 
 import numpy as np
 import matplotlib.pyplot as plt
+from matplotlib.ticker import NullFormatter
 from scipy import stats
 
 from photosensitive import config_ips as base
 from photosensitive import config_ips_avalan as cfg
 from photosensitive.report import FALLBACK_DIR, load_results
 from descriptive_analysis import plots
-from descriptive_analysis.plots import _save, _label, _grid, _box_by_group, _stars
+from descriptive_analysis.plots import _save as _save_fig, _label, _grid, _box_by_group, _stars
 from avalanche_criticality.power_law import model_cdf
 
 
 # ------------------------------------------------------------------ UTILITA'
+def _save(fig, path):
+    """Come plots._save, senza le etichette delle tacche secondarie sugli assi log (si sovrappongono)."""
+    for ax in fig.axes:
+        ax.xaxis.set_minor_formatter(NullFormatter())
+        ax.yaxis.set_minor_formatter(NullFormatter())
+    _save_fig(fig, path)
+
+
 def _logbin_pdf(x, n_bins=20):
     """PDF di dati interi con bin logaritmici: (centri, densita' per unita' di x)."""
     x = np.asarray(x, dtype=float)
@@ -299,7 +309,7 @@ def find_results(out_dir):
 
 def main():
     channel_set, _, out_root = base.choose_channel_set()   # stessa scelta di MAIN_IPS_AVALAN
-    out = find_results(Path(out_root) / cfg.OUT_SUBDIR)
+    out = find_results(cfg.results_dir(channel_set, out_root))
     print("Risultati letti da:", out)
     res = load_results(out / "avalanche_results.pkl")
     metrics, details, br = res["metrics"], res["details"], res["br"]

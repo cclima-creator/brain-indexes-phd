@@ -16,12 +16,21 @@ from pathlib import Path
 import numpy as np
 
 # ---- dati e output
-PHOTOSENSITIVE_FOLDER = r"C:\Users\Chiara Clima\Desktop\eeg preprocess criticality\eeg photosensitive\removed epo + ICA + removed bad IC"
-NOT_PHOTOSENSITIVE_FOLDER = r"C:\Users\Chiara Clima\Desktop\eeg preprocess criticality\eeg not photosensitive\removed epo + ICA + removed bad IC"
+# dataset con solo le 5 componenti brain principali per soggetto (<ID>_5compo.set)
+PHOTOSENSITIVE_FOLDER = r"C:\Users\Chiara Clima\Desktop\eeg preprocess criticality\eeg photosensitive\photosensitive_5components"
+NOT_PHOTOSENSITIVE_FOLDER = r"C:\Users\Chiara Clima\Desktop\eeg preprocess criticality\eeg not photosensitive\not_photosensitive_5components"
 GROUPS = {"photosensitive": PHOTOSENSITIVE_FOLDER,
           "not_photosensitive": NOT_PHOTOSENSITIVE_FOLDER}
 COLORS = {"photosensitive": "tab:red", "not_photosensitive": "tab:blue"}
-OUT_DIR = Path(r"C:\Users\Chiara Clima\Desktop\eeg preprocess criticality\analysis_output_ips")
+# soggetti esclusi dall'analisi (ID = parte del nome file prima del primo "_")
+EXCLUDED_SUBJECTS = {"not_photosensitive": ["9303987"]}
+
+
+def subject_files(group, files):
+    """Toglie dalla lista dei file i soggetti in EXCLUDED_SUBJECTS[group]."""
+    excl = set(EXCLUDED_SUBJECTS.get(group, []))
+    return [f for f in files if f.stem.split("_")[0] not in excl]
+OUT_DIR = Path(r"C:\Users\Chiara Clima\Desktop\eeg preprocess criticality\analysis_output_ips_5compo")
 
 # ---- quali canali analizzare
 CHANNEL_SET = None          # None = lo script chiede all'avvio; "all" = tutti i canali EEG;

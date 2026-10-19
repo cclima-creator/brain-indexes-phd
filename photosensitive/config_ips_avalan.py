@@ -4,11 +4,16 @@ Impostazioni dell'analisi delle valanghe sul database IPS (MAIN_IPS_AVALAN.py / 
 Percorsi, gruppi, colori e scelta dei canali vengono da config_ips.py (stessi dati dell'analisi
 preliminare); qui solo i parametri delle valanghe. Per un altro database: copia questo file.
 """
+from pathlib import Path
+
 from photosensitive import config_ips as base
 
 GROUPS = base.GROUPS
 COLORS = base.COLORS
-OUT_SUBDIR = "avalanches"        # risultati in OUT_DIR/avalanches (o OUT_DIR/occipital/avalanches)
+OUT_SUBDIR = "avalanches"        # usato solo se OUT_ROOT = None: risultati in OUT_DIR/avalanches
+# cartella dei risultati delle valanghe (tutti i canali; la ROI occipitale va in OUT_ROOT/occipital).
+# None = dentro la cartella dell'analisi preliminare (OUT_DIR/avalanches)
+OUT_ROOT = Path(r"C:\Users\Chiara Clima\Desktop\eeg preprocess criticality\criticality_results")
 
 # ---- binarizzazione (Maschke et al. 2024; Shriki et al. 2013)
 # soglia in SD dal punto in cui la distribuzione degli z-score si stacca dalla gaussiana
@@ -43,6 +48,13 @@ REPERTOIRE_MAX_PATTERNS = 4000   # sopra, la diversita' si stima su un sottoinsi
 
 # ---- cache per soggetto: se esiste con gli stessi parametri non si ricalcola
 OVERWRITE = False
+
+
+def results_dir(channel_set, prelim_root):
+    """Cartella dei risultati: OUT_ROOT (o OUT_ROOT/occipital), oppure prelim_root/OUT_SUBDIR."""
+    if OUT_ROOT is None:
+        return Path(prelim_root) / OUT_SUBDIR
+    return OUT_ROOT if channel_set == "all" else OUT_ROOT / base.OCCIPITAL_SUBDIR
 
 
 def threshold_for(group, band):

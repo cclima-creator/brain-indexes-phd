@@ -171,7 +171,7 @@ def main():
 
     band_dfs, epoch_rows, subj_rows, store, ec_list, ch_list = [], [], [], [], [], []
     for group, folder in cfg.GROUPS.items():
-        files = discover_files(folder)
+        files = cfg.subject_files(group, discover_files(folder))
         print(f"{group}: {len(files)} file")
         for fpath in files:
             print("  ", fpath.name)
