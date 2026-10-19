@@ -65,6 +65,8 @@ SHEET_ORDER = ["subject_band_metrics", "group_tests", "group_summary", "distribu
 TEST_METRICS = ["n_avalanches",                    # (mean/median_iei_ms tolti: analisi IEI disattivata)
                  "avalanche_rate_hz", "mean_size", "mean_duration_bins",
                 "tau", "alpha", "third", "dcc", "dcc_clauset", "dcc_range", "tau_range", "alpha_range",
+                "tau_rigorous", "alpha_rigorous", "third_rigorous", "dcc_rigorous",
+                "size_pct_in_range", "duration_pct_in_range",
                 "size_xmax_cutoff", "size_decades", "duration_xmax_cutoff", "duration_decades",
                 "size_p_gof", "duration_p_gof", "size_mse", "duration_mse",
                 "sigma_bins", "sigma_geometric", "sigma_ancestors",
@@ -428,6 +430,28 @@ def branching_bin_tests(br):
     return pd.DataFrame(rows)
 
 
+def add_rigorous_exponents(df):
+    """
+    Esponenti "rigorosi": solo le pendenze del range in cui la power law regge (linea arancio della
+    fig. A3) e solo se in quel range cade piu' di MIN_PCT_IN_RANGE % delle valanghe; altrimenti NaN.
+      size_pct_in_range / duration_pct_in_range : % di valanghe nel range power law
+      tau_rigorous   = tau_range   se size_pct_in_range > soglia
+      alpha_rigorous = alpha_range se duration_pct_in_range > soglia
+      third_rigorous = third_range (1/sigma nu z sulle durate nel range) se duration_pct_in_range > soglia
+      dcc_rigorous   = dcc_range (formula di Maschke) se entrambe le distribuzioni superano la soglia
+    """
+    n = df["n_avalanches"].where(df["n_avalanches"] > 0)
+    df["size_pct_in_range"] = 100 * df["size_n_range"].fillna(0) / n
+    df["duration_pct_in_range"] = 100 * df["duration_n_range"].fillna(0) / n
+    ok_s = df["size_pct_in_range"] > cfg.MIN_PCT_IN_RANGE
+    ok_d = df["duration_pct_in_range"] > cfg.MIN_PCT_IN_RANGE
+    df["tau_rigorous"] = df["tau_range"].where(ok_s)
+    df["alpha_rigorous"] = df["alpha_range"].where(ok_d)
+    df["third_rigorous"] = df["third_range"].where(ok_d)
+    df["dcc_rigorous"] = df["dcc_range"].where(ok_s & ok_d)
+    return df
+
+
 def distribution_tables(subjects, out_dir):
     """
     Per ogni soggetto, banda e variabile (S, T):
@@ -538,6 +562,7 @@ def save_avalanche_results(subjects, out_dir, out_root, channel_set):
 
     df = pd.DataFrame([r for s in subjects for r in s["rows"]])
     df = df.drop(columns=["mean_iei_ms", "median_iei_ms"], errors="ignore")   # IEI disattivata (cache vecchie)
+    df = add_rigorous_exponents(df)
     tests, summary = group_tables(df)
     dist_fit, dist_summary = distribution_tables(subjects, out_dir)
     br_long, scan = long_tables(subjects)

@@ -9,6 +9,7 @@ Grafici delle valanghe, database IPS: legge avalanche_results.pkl prodotto da MA
   figA3_powerlaw_fits_<banda>     PDF di S e T per soggetto con fit principale, range power law e cutoff
   figA4_size_duration_scaling     <S>(T) per soggetto con pendenza 1/(sigma nu z) e pendenza prevista
   figA5_exponents_dcc             tau, alpha, 1/(sigma nu z), DCC per banda e gruppo
+  figA5_rigorous_exponents        come A5, solo esponenti del range power law con > 50% dei dati
   figA6_powerlaw_quality          p-value, decadi del range, MSE, cutoff per banda e gruppo
   figA7_branching_ratio_bins      sigma per durata del time bin (4-18 ms), media ± SEM per gruppo
   figA8_repertoire                repertorio (pattern unici/s e per valanga) e diversita' dei pattern
@@ -83,19 +84,31 @@ def _groups(df):
     return [g for g in cfg.COLORS if g in set(df.group)]
 
 
-def _band_boxes(metrics, cols, bands, colors, out_png, title):
-    """Griglia righe = misure, colonne = bande, box per gruppo con test (riusa plots._box_by_group)."""
+def _band_boxes(metrics, cols, bands, colors, out_png, title, show_n=False):
+    """
+    Griglia righe = misure, colonne = bande, box per gruppo con test (riusa plots._box_by_group).
+    show_n: nel titolo, quanti soggetti per gruppo hanno un valore (non NaN) su quanti.
+    """
     fig, axes = plt.subplots(len(cols), len(bands), figsize=(3.1 * len(bands), 3.4 * len(cols)),
                              squeeze=False)
     for i, (col, ylabel) in enumerate(cols):
+        labelled = False                              # etichetta y sul primo pannello pieno della riga
         for j, b in enumerate(bands):
             ax = axes[i, j]
             d = metrics[metrics.band == b]
+            counts = " · ".join(f"{d.loc[d.group == g, col].notna().sum()}/{(d.group == g).sum()}"
+                                for g in colors) if show_n and col in d else ""
             if col not in d or d[col].notna().sum() == 0:
                 ax.axis("off")
+                if show_n:
+                    ax.text(0.5, 0.5, f"{b}\nno subject with\n> {cfg.MIN_PCT_IN_RANGE:g}% in PL range",
+                            ha="center", va="center", transform=ax.transAxes,
+                            fontsize=plots.BASE_FONT - 2, color="0.4")
                 continue
-            _box_by_group(ax, d, col, colors, ylabel if j == 0 else "")
-            ax.set_title(f"{b}\n{ax.get_title()}", fontsize=plots.BASE_FONT - 1)
+            _box_by_group(ax, d, col, colors, "" if labelled else ylabel)
+            labelled = True
+            ax.set_title(f"{b}\n{ax.get_title()}" + (f"\nn = {counts}" if show_n else ""),
+                         fontsize=plots.BASE_FONT - 1)
     fig.suptitle(title)
     _save(fig, out_png)
 
@@ -529,6 +542,15 @@ def main():
                           ("dcc", "DCC"), ("dcc_clauset", "DCC (Clauset xmin)")], bands, colors,
                 out / "figA5_exponents_dcc.png",
                 "Critical exponents and deviation from criticality coefficient (Maschke et al. 2024)")
+    rig = [(c, l) for c, l in (("tau_rigorous", "τ (size)\nPL range only"),
+                                ("alpha_rigorous", "α (duration)\nPL range only"),
+                                ("third_rigorous", "1/σνz\nPL range only"),
+                                ("dcc_rigorous", "DCC\nPL range only")) if c in metrics]
+    if rig:
+        _band_boxes(metrics, rig, bands, colors, out / "figA5_rigorous_exponents.png",
+                    "Critical exponents and DCC from the power-law range only (orange fits of fig. A3), "
+                    f"only where > {cfg.MIN_PCT_IN_RANGE:g}% of avalanches are in that range "
+                    "(n = subjects with a value: photosensitive · not photosensitive)", show_n=True)
     _band_boxes(metrics, [("size_p_gof", "p power law (S)"), ("size_decades", "decades (S)"),
                           ("size_xmax_cutoff", "cutoff S"), ("size_mse", "MSE log-log (S)"),
                           ("duration_p_gof", "p power law (T)"), ("duration_mse", "MSE log-log (T)")],

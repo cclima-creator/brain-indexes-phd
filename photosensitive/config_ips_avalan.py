@@ -47,6 +47,8 @@ XMIN = "min"                     # xmin di tau/alpha/DCC: "min" = minimo dei dat
 N_BOOT = 100                     # p-value di Clauset: 100 per esplorare, 1000-2500 per i risultati finali
 N_SIM = 100                      # p-value di ogni range nella ricerca del cutoff
 MIN_TAIL = 30                    # minimo di valanghe nella coda / nel range per fittare
+MIN_PCT_IN_RANGE = 50.0          # esponenti "rigorosi" (figA5_rigorous): solo se > 50% delle valanghe
+                                 # sta nel range power law della fig. A3, altrimenti NaN
 THIRD_METHOD = "ols"             # 1/(sigma nu z): "ols" (Friedman 2012) o "edgeofpy" (solo confronto)
 
 # ---- repertorio
