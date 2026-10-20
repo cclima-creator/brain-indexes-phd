@@ -77,5 +77,13 @@ Requires `numpy scipy pandas matplotlib mne openpyxl neurokit2 edgeofpy` and `sp
 Tests: `python edge_of_chaos/test_chaos.py`.
 
 Photosensitive database: `photosensitive/MAIN_IPS_CHAOS.py` (calls `run` with the IPS groups,
-excluded subjects and channel choice). Results and figures in `edge_of_chaos_results` next to
-`criticality_results` (`edge_of_chaos_results/occipital` for the visual ROI).
+excluded subjects and channel choice, 7 subjects in parallel). Every measure is computed on
+broadband 1-45 Hz and on each band (columns `<measure>_<band>`; the aperiodic exponent only
+broadband). Results and figures in `edge_of_chaos_results` next to `criticality_results`
+(`edge_of_chaos_results/occipital` for the visual ROI).
+
+## One figure per index (all modules)
+`descriptive_analysis/index_figures.py` draws one image per index with one panel per band
+(broadband first), Mann-Whitney p and FDR across the bands of that index. Written in
+`per_index/` by `plot_ips_sync.py`, `edge_of_chaos/plot_chaos.py` (also `topo_<index>.png`) and
+`photosensitive/plot_ips_avalan_per_index.py` (from `avalanche_results.pkl`, no re-analysis).
