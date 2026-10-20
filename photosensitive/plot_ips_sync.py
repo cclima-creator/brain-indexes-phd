@@ -13,6 +13,8 @@ occipital ROI in syncron_results/occipital).
   figS7_plv_time               PLV(t) across epochs (mean over pairs) from the stimulation onset
   figS8_summary_heatmap        group medians and group difference (rank-biserial r), metric x band
   figS9_lag_insensitive        mean PLI, wPLI, debiased wPLI, imaginary coherence per band and group
+  per_index/<index>.png        one image per index: one panel per band (broadband first),
+                               Mann-Whitney p and FDR across the bands of that index
 
 Interpretation: with channels rebuilt from 5 ICA components, Kuramoto GS / M, PC and PLV mostly
 reflect the instantaneous mixing (and the polarity of the topographies for R): they are read as
@@ -35,6 +37,7 @@ from photosensitive.report import FALLBACK_DIR, load_results
 from photosensitive.plot_ips_avalan import _band_boxes
 from descriptive_analysis import plots, topography
 from descriptive_analysis.plots import _save, _label, _stars
+from descriptive_analysis.index_figures import plot_index_bands
 
 MEASURE_LABELS = {"pc": "phase coherence", "plv": "PLV", "ppc": "PPC", "pli": "PLI", "wpli": "wPLI",
                   "dwpli": "debiased wPLI", "icoh": "imaginary coherence"}
@@ -225,6 +228,27 @@ def plot_summary_heatmap(metrics, bands, colors, out_png):
     _save(fig, out_png)
 
 
+INDEX_LABELS = {"gs": "global synchrony (mean R)", "metastability": "metastability (std R)",
+                "metastability_pooled": "metastability pooled over epochs",
+                "metastability_cv": "metastability / GS", "gs_norm": "GS / surrogate GS",
+                "metastability_norm": "M / surrogate M", "R_median": "median R", "R_q95": "R, 95th percentile",
+                "pc_mean": "phase coherence (mean over pairs)", "pc_median": "phase coherence (median over pairs)",
+                "plv_mean": "PLV across epochs", "ppc_mean": "PPC (unbiased PLV²)", "pli_mean": "PLI",
+                "wpli_mean": "wPLI", "dwpli_mean": "debiased wPLI", "icoh_mean": "imaginary coherence"}
+INDEX_NOTE = ("Broadband (1-45 Hz) Hilbert phase follows the dominant rhythm: rough summary. "
+              "Kuramoto, PC, PLV: sensitive to zero-lag mixing (relative comparison).")
+
+
+def plot_per_index(metrics, bands, colors, out_dir):
+    """per_index/<index>.png for every index of the subject x band table."""
+    d = Path(out_dir) / "per_index"
+    d.mkdir(exist_ok=True)
+    for col, lab in INDEX_LABELS.items():
+        if col in metrics:
+            plot_index_bands(metrics, col, lab, bands, colors, d / f"{col}.png",
+                             title=f"{lab} per band (Mann-Whitney; FDR across bands)", note=INDEX_NOTE)
+
+
 # ------------------------------------------------------------------ MAIN
 def find_results(out_dir, name="synchrony_results.pkl"):
     for d in (out_dir, FALLBACK_DIR / cfg.OUT_SUBDIR):
@@ -274,6 +298,7 @@ def main():
     plot_stim_freq(res["epochs"], res["stim_freq_tests"], bands, colors, out / "figS6_stim_freq.png")
     plot_plv_time(details, metrics, bands, colors, out / "figS7_plv_time.png")
     plot_summary_heatmap(metrics, bands, colors, out / "figS8_summary_heatmap.png")
+    plot_per_index(metrics, bands, colors, out)
     print("\nFigures saved in:", out)
 
 

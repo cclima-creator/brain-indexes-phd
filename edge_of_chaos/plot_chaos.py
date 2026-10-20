@@ -1,12 +1,13 @@
 # -*- coding: utf-8 -*-
 """
-Figures of the edge-of-chaos analysis, from <out>/chaos_results.pkl (no re-analysis):
+Figures of the edge-of-chaos analysis, from <out>/chaos_results.pkl (no re-analysis).
+Columns are <measure>_<band> (MAIN_chaos.analyze_subject); one image per measure:
 
-  chaos_boxplots.png        one panel per measure: subjects by group + Mann-Whitney p
-  chaos_distributions.png   distribution of the channel values (all subjects) per group
-  chaos_topomaps_<k>.png    group maps + difference map (FDR-marked channels), 4 measures per figure
-  chaos_mse_curves.png      MSE vs scale, mean +- SEM per group, significant scales marked
-  chaos_dfa_<band>.png      DFA fluctuation functions (log-log), mean per group
+  per_index/<measure>.png        one panel per band (broadband first): subjects by group,
+                                 Mann-Whitney p and FDR across the bands of that measure
+  per_index/topo_<measure>.png   group maps + difference map per band (channel measures only)
+  chaos_mse_curves.png           MSE vs scale, mean +- SEM per group, one panel per band
+  chaos_dfa_<band>.png           DFA fluctuation functions (log-log), mean per group
 
     python edge_of_chaos/plot_chaos.py <out>/chaos_results.pkl
 """
@@ -22,82 +23,94 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from descriptive_analysis.plots import paper_style, _box_by_group, _grid, _save, _label
+from descriptive_analysis.plots import paper_style, _save, _label, BASE_FONT
 from descriptive_analysis.topography import plot_group_topomaps
+from descriptive_analysis.index_figures import plot_index_bands, wide_to_long
 from edge_of_chaos.io_chaos import load_results
 from edge_of_chaos.report_chaos import metric_columns
 
+BAND_ORDER = ["broadband", "delta", "theta", "alpha", "beta", "gamma"]
 LABELS = {"lzc": "Lempel-Ziv complexity", "katz_fd": "Katz FD", "renyi_h2": "Rényi H$_2$ (nats)",
           "mse_auc": "MSE (mean over scales)", "aperiodic_exponent": "aperiodic exponent β",
           "lambda_max": "λ$_{max}$ (Dahmen)", "cov_width": "covariance width",
           "entropy_production": "entropy production (nats/step)",
-          "entropy_production_per_s": "entropy production (nats/s)"}
+          "entropy_production_per_s": "entropy production (nats/s)",
+          "k": "0-1 test K", "dfa": "DFA α (amplitude envelope)", "fei": "fE/I",
+          "k_lp4": "0-1 test K, low-pass 4 Hz", "k_lp8": "0-1 test K, low-pass 8 Hz",
+          "k_lp13": "0-1 test K, low-pass 13 Hz"}
+NOTES = {"aperiodic_exponent": "Fit of the whole 2-40 Hz spectrum: one value, not defined per band.",
+         "cov_width": "Integrated covariance ~0 on band-passed signals: width not reliable (see README).",
+         "lambda_max": "Computed from the covariance width: not reliable on band-passed signals.",
+         "k": "K of the band-passed signal; narrow bands are quasi-periodic, so K is lower there.",
+         "fei": "fE/I is NaN where DFA α <= 0.6 (no long-range temporal correlations)."}
+
+
+def split_band(col, bands=BAND_ORDER):
+    """'lzc_alpha' -> ('lzc', 'alpha'); columns without a band suffix -> (col, None)."""
+    for b in bands:
+        if col.endswith(f"_{b}"):
+            return col[:-len(b) - 1], b
+    return col, None
 
 
 def label(m):
-    if m in LABELS:
-        return LABELS[m]
-    for pre, name in (("k_lp", "0-1 test K, low-pass {} Hz"), ("dfa_", "DFA α, {}"), ("fei_", "fE/I, {}")):
-        if m.startswith(pre):
-            return name.format(m[len(pre):])
-    return m
+    base, band = split_band(m)
+    return LABELS.get(base, base) + (f", {band}" if band else "")
 
 
-def plot_boxplots(subj, colors, out_png):
-    metrics = [m for m in metric_columns(subj) if np.isfinite(subj[m]).any()]   # skip all-NaN
-    fig, axes = _grid(len(metrics), ncols=4, h=3.8, w=3.6)
-    for ax, m in zip(axes, metrics):
-        _box_by_group(ax, subj, m, colors, label(m))
-    _save(fig, out_png)
+def measures(df):
+    """Base measure names present as <measure>_<band> columns, in first-seen order."""
+    out = []
+    for c in metric_columns(df):
+        base, band = split_band(c)
+        if band and base not in out and df[c].replace([np.inf, -np.inf], np.nan).notna().any():
+            out.append(base)
+    return out
 
 
-def plot_distributions(chan, colors, out_png, bins=30):
-    metrics = [m for m in metric_columns(chan) if np.isfinite(chan[m]).any()]
-    fig, axes = _grid(len(metrics), ncols=4, h=3.2, w=3.8)
-    for ax, m in zip(axes, metrics):
-        x_all = chan[m].replace([np.inf, -np.inf], np.nan).dropna()
-        if x_all.empty:
-            ax.axis("off")
-            continue
-        edges = np.histogram_bin_edges(x_all, bins)
-        for g, col in colors.items():
-            x = chan.loc[chan.group == g, m].replace([np.inf, -np.inf], np.nan).dropna()
-            if len(x):
-                ax.hist(x, edges, density=True, histtype="stepfilled", alpha=0.35, color=col,
-                        label=_label(g))
-                ax.axvline(x.median(), color=col, lw=2)
-        ax.set_xlabel(label(m))
-        ax.set_ylabel("density")
-    axes[0].legend()
-    _save(fig, out_png)
-
-
-def plot_topomaps(chan, colors, fig_dir, per_fig=4):
-    metrics = metric_columns(chan)
-    for k in range(0, len(metrics), per_fig):
-        ms = [(m, label(m)) for m in metrics[k:k + per_fig]]
-        plot_group_topomaps(chan, ms, colors, fig_dir / f"chaos_topomaps_{k // per_fig + 1}.png",
-                            "Edge of chaos")
+def plot_per_index(subj, chan, colors, fig_dir):
+    """per_index/<measure>.png for every measure, per_index/topo_<measure>.png for channel measures."""
+    d = Path(fig_dir) / "per_index"
+    d.mkdir(parents=True, exist_ok=True)
+    for m in measures(subj):
+        long = wide_to_long(subj, m, BAND_ORDER)
+        plot_index_bands(long, m, LABELS.get(m, m), BAND_ORDER, colors, d / f"{m}.png",
+                         title=f"{LABELS.get(m, m)} per band (Mann-Whitney; FDR across bands)",
+                         note=NOTES.get(m))
+    if chan.channel.nunique() >= 3:
+        for m in measures(chan):
+            cols = [(f"{m}_{b}", f"{b}\n{LABELS.get(m, m)}") for b in BAND_ORDER if f"{m}_{b}" in chan
+                    and chan[f"{m}_{b}"].notna().any()]
+            if cols:
+                plot_group_topomaps(chan, cols, colors, d / f"topo_{m}.png", f"{LABELS.get(m, m)} per band")
 
 
 def plot_mse_curves(mse_long, tests, colors, out_png, alpha=0.05):
+    """MSE vs scale per band, mean +- SEM per group; * = scales with p_fdr < alpha (FDR within band)."""
     if mse_long is None or mse_long.empty:
         return
-    fig, ax = plt.subplots(figsize=(6, 4.5))
-    for g, col in colors.items():
-        d = mse_long[mse_long.group == g].groupby("scale")["mse"]
-        if not len(d):
-            continue
-        m, se = d.mean(), d.sem()
-        ax.plot(m.index, m.values, color=col, label=_label(g))
-        ax.fill_between(m.index, m - se, m + se, color=col, alpha=0.25, lw=0)
-    if tests is not None and len(tests):
-        sig = tests.loc[tests.p_fdr < alpha, "scale"]
-        y = ax.get_ylim()[1]
-        ax.scatter(sig, np.full(len(sig), y), marker="*", color="k", s=40, label=f"FDR q < {alpha}")
-    ax.set_xlabel("scale factor")
-    ax.set_ylabel("sample entropy")
-    ax.legend()
+    if "band" not in mse_long:
+        mse_long = mse_long.assign(band="broadband")
+    bands = [b for b in BAND_ORDER if b in set(mse_long.band)]
+    fig, axes = plt.subplots(1, len(bands), figsize=(4.2 * len(bands), 4.2), squeeze=False)
+    for ax, b in zip(axes[0], bands):
+        mb = mse_long[mse_long.band == b]
+        for g, col in colors.items():
+            d = mb[mb.group == g].groupby("scale")["mse"]
+            if not len(d):
+                continue
+            m, se = d.mean(), d.sem()
+            ax.plot(m.index, m.values, color=col, label=_label(g))
+            ax.fill_between(m.index, m - se, m + se, color=col, alpha=0.25, lw=0)
+        if tests is not None and len(tests) and "band" in tests:
+            sig = tests.loc[(tests.band == b) & (tests.p_fdr < alpha), "scale"]
+            y = ax.get_ylim()[1]
+            ax.scatter(sig, np.full(len(sig), y), marker="*", color="k", s=40, label=f"FDR q < {alpha}")
+        ax.set_title(b)
+        ax.set_xlabel("scale factor")
+    axes[0, 0].set_ylabel("sample entropy")
+    axes[0, 0].legend(fontsize=BASE_FONT - 3)
+    fig.suptitle("Multiscale entropy per band")
     _save(fig, out_png)
 
 
@@ -133,13 +146,11 @@ def make_all_figures(pkl_path, fig_dir):
     fig_dir = Path(fig_dir)
     fig_dir.mkdir(parents=True, exist_ok=True)
     subj, chan = t["subject_metrics"], t["channel_metrics"]
-    plot_boxplots(subj, colors, fig_dir / "chaos_boxplots.png")
-    plot_distributions(chan, colors, fig_dir / "chaos_distributions.png")
-    if subj.group.nunique() >= 1 and chan.channel.nunique() >= 3:
-        plot_topomaps(chan, colors, fig_dir)
+    plot_per_index(subj, chan, colors, fig_dir)
     plot_mse_curves(t.get("mse_long"), t.get("mse_scale_tests"), colors, fig_dir / "chaos_mse_curves.png")
-    for band in sorted({k[4:] for d in details.values() for k in d if k.startswith("dfa_")}):
-        plot_dfa_curves(details, subj, band, colors, fig_dir / f"chaos_dfa_{band}.png")
+    for band in BAND_ORDER:
+        if any(f"dfa_{band}" in d for d in details.values()):
+            plot_dfa_curves(details, subj, band, colors, fig_dir / f"chaos_dfa_{band}.png")
     print(f"Figures saved in {fig_dir}")
 
 

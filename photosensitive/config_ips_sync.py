@@ -15,9 +15,12 @@ OUT_SUBDIR = "synchrony"         # used only if OUT_ROOT = None: results in OUT_
 # (visual ROI). None = inside the preliminary-analysis folder (OUT_DIR/synchrony)
 OUT_ROOT = Path(r"C:\Users\Chiara Clima\Desktop\eeg preprocess criticality\syncron_results")
 
-# ---- bands: only narrow bands (the Hilbert phase is meaningful for narrow-band signals, so no
-# broadband here, unlike the avalanches)
-BANDS = dict(base.BANDS)          # delta 1-4, theta 4-8, alpha 8-13, beta 13-30, gamma 30-45 Hz
+# ---- bands: broadband 1-45 Hz (as the other analyses) and the narrow bands delta 1-4, theta 4-8,
+# alpha 8-13, beta 13-30, gamma 30-45 Hz. CAUTION: the Hilbert phase is well defined only for
+# narrow-band signals; on the broadband signal it follows the dominant rhythm (often alpha) and
+# jumps between components, so the broadband synchrony values are a rough summary, not a phase
+# of one oscillation.
+BANDS = {"broadband": (1.0, 45.0), **base.BANDS}
 
 # ---- phase extraction (synchrony_criticality/phase.py)
 FILTER_ORDER = 4                  # Butterworth order (doubled by the forward-backward filtering)

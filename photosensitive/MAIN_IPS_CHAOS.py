@@ -26,18 +26,20 @@ OUT_ROOT = Path(r"C:\Users\Chiara Clima\Desktop\eeg preprocess criticality\edge_
 
 # ---- overrides of config_chaos for the IPS database
 cfg.BANDS = dict(base.BANDS)          # same bands as the other IPS analyses
+cfg.SIGNAL_BANDS = ["broadband", *base.BANDS]   # every measure on broadband and on each band
 # 12 s epochs, one per stimulation frequency: K, DFA and fE/I need long signals, so they are
 # computed on the concatenation of the trimmed epochs (10 s each). With CONCATENATE_EPOCHS = False
 # the DFA fit range would shrink to <= 1 s (1/10 of one epoch).
 cfg.CONCATENATE_EPOCHS = True
 cfg.OVERWRITE = False
+N_JOBS = 7                            # subjects analysed in parallel (8 cores: one left free)
 
 
 def main():
     channel_set, channels, _ = base.choose_channel_set()
     out = OUT_ROOT if channel_set == "all" else OUT_ROOT / base.OCCIPITAL_SUBDIR
     run(base.GROUPS, out, cfg, colors=base.COLORS, fixed_length_s=base.FIXED_LENGTH_S,
-        window=base.ANALYSIS_WINDOW, channels=channels, file_filter=base.subject_files)
+        window=base.ANALYSIS_WINDOW, channels=channels, file_filter=base.subject_files, n_jobs=N_JOBS)
 
 
 if __name__ == "__main__":

@@ -146,19 +146,22 @@ def test_pipeline_end_to_end():
                 mne.EpochsArray(x * 1e-5, info, verbose="ERROR").save(
                     tmp / g / f"{g}{s}-epo.fif", verbose="ERROR")
         try:
-            tables = run(groups, tmp / "out", cfg, pattern="*-epo.fif")
+            tables = run(groups, tmp / "out", cfg, pattern="*-epo.fif", n_jobs=2)
             subj = tables["subject_metrics"]
             assert len(subj) == 6
-            for col in ("k_lp8", "lzc", "katz_fd", "renyi_h2", "mse_auc", "aperiodic_exponent",
-                        "dfa_alpha", "lambda_max", "cov_width", "entropy_production"):
+            for col in ("k_lp8_broadband", "k_broadband", "k_alpha", "lzc_broadband", "lzc_gamma",
+                        "katz_fd_theta", "renyi_h2_beta", "mse_auc_delta", "aperiodic_exponent_broadband",
+                        "dfa_alpha", "dfa_broadband", "lambda_max_broadband", "cov_width_alpha",
+                        "entropy_production_broadband"):
                 assert col in subj and subj[col].notna().all(), col
             # synthetic noise has no LRTC (DFA <= 0.6): fE/I is NaN by construction
             assert "fei_alpha" in subj
             # steeper spectrum in group B
-            assert subj.loc[subj.group == "B", "aperiodic_exponent"].min() > \
-                subj.loc[subj.group == "A", "aperiodic_exponent"].max()
+            assert subj.loc[subj.group == "B", "aperiodic_exponent_broadband"].min() > \
+                subj.loc[subj.group == "A", "aperiodic_exponent_broadband"].max()
             assert (tmp / "out" / "chaos_results.xlsx").exists()
-            assert (tmp / "out" / "figures" / "chaos_boxplots.png").exists()
+            assert (tmp / "out" / "figures" / "per_index" / "lzc.png").exists()
+            assert (tmp / "out" / "figures" / "per_index" / "topo_lzc.png").exists()
             assert len(list((tmp / "out" / "subjects").glob("*.pkl"))) == 6
             run(groups, tmp / "out", cfg, pattern="*-epo.fif", plots=False)  # second run: cache
         finally:

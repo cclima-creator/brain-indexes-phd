@@ -7,9 +7,10 @@ MAIN_chaos.analyze_subject).
   channel_metrics  one row per subject x channel
   epoch_metrics    one row per subject x epoch (channel means of the per-epoch measures)
   group_tests      Mann-Whitney (2 groups) / Kruskal-Wallis per measure, FDR across measures
+                   (all measures x bands together)
   group_summary    n, median, IQR, mean, SD per group and measure
   channel_tests    per measure and channel, FDR across channels (topographies)
-  mse_scale_tests  MSE (channel mean) compared at every scale, FDR across scales
+  mse_scale_tests  MSE (channel mean) compared at every scale, FDR across scales within band
 """
 import numpy as np
 import pandas as pd
@@ -37,32 +38,38 @@ def group_summary(df, metrics, group_col="group"):
 
 
 def mse_table(results):
-    """Long table subject x scale of the MSE curve averaged over channels."""
+    """Long table subject x signal band x scale of the MSE curve averaged over channels."""
     rows = []
     for r in results:
         d = r["detail"]
-        if "mse_curve" not in d:
-            continue
-        curve = np.nanmean(d["mse_curve"], axis=0)
-        rows += [dict(group=r["row"]["group"], subject=r["row"]["subject"], scale=int(s), mse=float(v))
-                 for s, v in zip(d["mse_scales"], curve)]
+        for key, curve in d.items():
+            if not key.startswith("mse_curve"):
+                continue
+            band = key[len("mse_curve_"):] or "broadband"
+            curve = np.nanmean(curve, axis=0)
+            rows += [dict(group=r["row"]["group"], subject=r["row"]["subject"], band=band,
+                          scale=int(s), mse=float(v)) for s, v in zip(d["mse_scales"], curve)]
     return pd.DataFrame(rows)
 
 
 def mse_scale_tests(mse_long):
+    """MSE compared between groups at every scale; p_fdr = FDR across scales within each band."""
     if mse_long.empty:
         return pd.DataFrame()
     out = []
-    for s, d in mse_long.groupby("scale"):
-        t = compare_groups(d, ["mse"])
-        if len(t):
-            t.insert(0, "scale", s)
-            out.append(t.drop(columns="p_fdr"))
-    if not out:
-        return pd.DataFrame()
-    t = pd.concat(out, ignore_index=True)
-    t["p_fdr"] = fdr_bh(t["p"].values)
-    return t
+    for b, db in mse_long.groupby("band", sort=False):
+        part = []
+        for s, d in db.groupby("scale"):
+            t = compare_groups(d, ["mse"])
+            if len(t):
+                t.insert(0, "scale", s)
+                t.insert(0, "band", b)
+                part.append(t.drop(columns="p_fdr"))
+        if part:
+            t = pd.concat(part, ignore_index=True)
+            t["p_fdr"] = fdr_bh(t["p"].values)
+            out.append(t)
+    return pd.concat(out, ignore_index=True) if out else pd.DataFrame()
 
 
 def build_tables(results, cfg=None):
