@@ -10,11 +10,14 @@ per estimator (bins, geometric, ancestors), one column per band, sigma vs time b
 plus the band's own avalanche bin as an open diamond), mean +- SEM per group, stars = Mann-Whitney
 with FDR over the time bins of that band and estimator.
 
-The Fano factor slope (ff_beta) is shown with its fits:
-  per_index/fano_slope.png        per band: FF(W) of every subject with its OLS fit in log-log,
-                                  group mean curve with the fit of the mean; below, beta per group
-                                  (Mann-Whitney p, FDR across bands)
-  per_index/fano_fit_<band>.png   one panel per subject: points, fit line, beta +- SE and R^2
+The Fano curve FF(W) bends in log-log (flat at short windows, steeper at long ones), so it is
+fitted with two slopes and a break point (avalanche_criticality.fano_factor.fano_two_slopes):
+  per_index/fano_slope.png        per band: FF(W) of every subject with its two-slope fit, group
+                                  mean curve with its fit and break point; below, beta short,
+                                  beta long and break point per group (Mann-Whitney, FDR across bands)
+  per_index/fano_fit_<band>.png   one panel per subject: points, single-slope fit (grey dashed),
+                                  two-slope fit (black), break point, delta BIC
+  fano_two_slopes.xlsx            the fits of every subject x band, group tests and medians
 """
 import sys
 from pathlib import Path
@@ -37,7 +40,9 @@ from descriptive_analysis import plots
 from descriptive_analysis.index_figures import plot_index_bands, band_tests
 from descriptive_analysis.plots import _box_by_group
 from descriptive_analysis.plots import _save, _label, _stars
-from descriptive_analysis.summary_stats import fdr_bh
+from descriptive_analysis.summary_stats import fdr_bh, compare_groups
+from photosensitive.report import save_tables_excel
+from avalanche_criticality.fano_factor import fano_two_slopes, two_slope_curve
 
 INDEX_LABELS = {
     "n_avalanches": "number of avalanches", "avalanche_rate_hz": "avalanche rate (Hz)",
@@ -154,74 +159,113 @@ def _fit_line(ax, f, color, **kw):
     ax.plot(1000 * x, 10 ** (f["intercept"] + f["slope"] * np.log10(x)), color=color, **kw)
 
 
-def plot_fano_slope(details, metrics, bands, colors, out_png):
-    """Per band: FF(W) curves + fits (top) and beta per group (bottom)."""
-    groups = [g for g in colors if g in set(metrics.group)]
-    tests = band_tests(metrics, "ff_beta", bands)
-    fig, axes = plt.subplots(2, len(bands), figsize=(3.5 * len(bands), 7.4), squeeze=False)
+def fano_table(details):
+    """One row per subject x band: single-slope fit and two-slope fit with break point (fano_two_slopes)."""
+    rows = []
+    for (g, sid, b), det in details.items():
+        c = det["fano_curve"]
+        rows.append(dict(group=g, subject=sid, band=b, **fano_two_slopes(c["windows_s"], c["ff"])))
+    t = pd.DataFrame(rows)
+    t["break_ms"] = 1000 * t.pop("break_s")
+    return t
+
+
+def _two_slope_line(ax, w, fit, color, **kw):
+    ws = np.logspace(np.log10(w.min()), np.log10(w.max()), 100)
+    ax.plot(1000 * ws, two_slope_curve(fit, ws), color=color, **kw)
+
+
+def _log_axes(ax):
+    ax.set_xscale("log")
+    ax.set_yscale("log")
+    ax.xaxis.set_minor_formatter(NullFormatter())
+    ax.yaxis.set_minor_formatter(NullFormatter())
+
+
+FANO_ROWS = [("beta_short", "β short windows"), ("beta_long", "β long windows"), ("break_ms", "break point (ms)")]
+
+
+def plot_fano_slope(details, table, bands, colors, out_png):
+    """
+    Per band: FF(W) of every subject with its two-slope fit (thin) and the group-mean curve with its
+    two-slope fit (thick, dotted line = break point); below, beta short, beta long and break point
+    per group (Mann-Whitney p, FDR across bands).
+    """
+    groups = [g for g in colors if g in set(table.group)]
+    tests = {c: band_tests(table, c, bands) for c, _ in FANO_ROWS}
+    fig, axes = plt.subplots(1 + len(FANO_ROWS), len(bands), figsize=(3.5 * len(bands), 3.4 * (1 + len(FANO_ROWS))),
+                             squeeze=False)
     for j, b in enumerate(bands):
         ax = axes[0, j]
         for g in groups:
-            fits = [fano_fit(det["fano_curve"]) for (gg, sid, bb), det in details.items() if gg == g and bb == b]
-            fits = [f for f in fits if f is not None]
-            for f in fits:
-                ax.plot(1000 * f["w"], f["ff"], "o", color=colors[g], ms=2, alpha=0.35)
-                _fit_line(ax, f, colors[g], lw=0.8, alpha=0.45)
-            if fits:
-                n = min(f["w"].size for f in fits)
-                logff = np.nanmean([np.log10(np.where(f["ff"][:n] > 0, f["ff"][:n], np.nan)) for f in fits], 0)
-                mean = fano_fit(dict(windows_s=fits[0]["w"][:n], ff=10 ** logff))
-                ax.plot(1000 * mean["w"], mean["ff"], "o", color=colors[g], ms=5, mec="k", mew=0.5)
-                _fit_line(ax, mean, colors[g], lw=2.6,
-                          label=f"{_label(g)}: β = {np.median([f['slope'] for f in fits]):.2f} (median)")
+            curves = [det["fano_curve"] for (gg, sid, bb), det in details.items() if gg == g and bb == b]
+            for c in curves:
+                f = fano_two_slopes(c["windows_s"], c["ff"])
+                ax.plot(1000 * c["windows_s"], c["ff"], "o", color=colors[g], ms=2, alpha=0.35)
+                if np.isfinite(f["break_s"]):
+                    _two_slope_line(ax, c["windows_s"], f, colors[g], lw=0.7, alpha=0.4)
+            if curves:
+                n = min(len(c["ff"]) for c in curves)
+                w = np.asarray(curves[0]["windows_s"][:n])
+                logff = np.nanmean([np.log10(np.where(np.asarray(c["ff"][:n]) > 0, c["ff"][:n], np.nan))
+                                    for c in curves], 0)
+                fm = fano_two_slopes(w, 10 ** logff)
+                ax.plot(1000 * w, 10 ** logff, "o", color=colors[g], ms=5, mec="k", mew=0.5)
+                _two_slope_line(ax, w, fm, colors[g], lw=2.6,
+                                label=f"{_label(g)}: {fm['beta_short']:.2f} → {fm['beta_long']:.2f}, "
+                                      f"break {1000 * fm['break_s']:.0f} ms")
+                ax.axvline(1000 * fm["break_s"], color=colors[g], ls=":", lw=1.2)
         ax.axhline(1, color="k", ls="--", lw=1)
-        ax.set_xscale("log")
-        ax.set_yscale("log")
-        ax.xaxis.set_minor_formatter(NullFormatter())
-        ax.yaxis.set_minor_formatter(NullFormatter())
+        _log_axes(ax)
         ax.set_title(b)
         ax.set_xlabel("window W (ms)")
-        ax.legend(fontsize=plots.BASE_FONT - 5, loc="upper left")
-        bx = axes[1, j]
-        _box_by_group(bx, metrics[metrics.band == b], "ff_beta", colors, "Fano slope β" if j == 0 else "")
-        q = tests.get(b, (np.nan, np.nan))[1]
-        bx.set_title(f"{bx.get_title()}\nFDR q = {q:.3f}" if np.isfinite(q) else bx.get_title(),
-                     fontsize=plots.BASE_FONT - 1)
+        ax.legend(fontsize=plots.BASE_FONT - 6, loc="upper left")
+        for i, (col, lab) in enumerate(FANO_ROWS, start=1):
+            bx = axes[i, j]
+            _box_by_group(bx, table[table.band == b], col, colors, lab if j == 0 else "")
+            q = tests[col].get(b, (np.nan, np.nan))[1]
+            bx.set_title(f"{bx.get_title()}\nFDR q = {q:.3f}" if np.isfinite(q) else bx.get_title(),
+                         fontsize=plots.BASE_FONT - 2)
+            if col == "break_ms":
+                bx.set_yscale("log")
     axes[0, 0].set_ylabel("FF(W)")
-    fig.suptitle("Fano factor curve FF(W) ~ W^β: thin = each subject (points + OLS fit), thick = fit of "
-                 "the group mean (log10 average); β > 0 = correlations at long time scales")
+    fig.suptitle("Fano factor curve with two regimes: FF(W) ~ W^β_short below the break point, W^β_long above "
+                 "(continuous broken line in log-log); thick = fit of the group mean (log10 average)")
     _save(fig, out_png)
 
 
-def plot_fano_subjects(details, metrics, band, colors, out_png, ncols=6):
-    """One panel per subject in one band: FF(W) points, OLS fit, beta +- SE, R^2."""
+def plot_fano_subjects(details, table, band, colors, out_png, ncols=6):
+    """One panel per subject: FF(W), single-slope fit (grey dashed), two-slope fit (black), break point."""
     keys = [(g, sid) for g in colors for (gg, sid, bb) in details if gg == g and bb == band]
     if not keys:
         return
     nrows = int(np.ceil(len(keys) / ncols))
-    fig, axes = plt.subplots(nrows, ncols, figsize=(3.0 * ncols, 2.7 * nrows), squeeze=False,
+    fig, axes = plt.subplots(nrows, ncols, figsize=(3.1 * ncols, 2.9 * nrows), squeeze=False,
                              sharex=True, sharey=True)
     for ax in axes.ravel()[len(keys):]:
         ax.axis("off")
     for ax, (g, sid) in zip(axes.ravel(), keys):
-        f = fano_fit(details[(g, sid, band)]["fano_curve"])
-        if f is None:
+        c = details[(g, sid, band)]["fano_curve"]
+        one = fano_fit(c)
+        two = fano_two_slopes(c["windows_s"], c["ff"])
+        if one is None or not np.isfinite(two["break_s"]):
             ax.set_title(f"{sid.split('_')[0]}: no fit", fontsize=plots.BASE_FONT - 4)
             continue
-        ax.plot(1000 * f["w"][f["ok"]], f["ff"][f["ok"]], "o", color=colors[g], ms=4)
-        _fit_line(ax, f, "k", lw=1.2)
+        ax.plot(1000 * one["w"][one["ok"]], one["ff"][one["ok"]], "o", color=colors[g], ms=4)
+        _fit_line(ax, one, "0.55", lw=1, ls="--")
+        _two_slope_line(ax, one["w"][one["ok"]], two, "k", lw=1.3)
+        ax.axvline(1000 * two["break_s"], color="k", ls=":", lw=1)
         ax.axhline(1, color="0.5", ls="--", lw=0.8)
-        ax.set_xscale("log")
-        ax.set_yscale("log")
-        ax.xaxis.set_minor_formatter(NullFormatter())
-        ax.yaxis.set_minor_formatter(NullFormatter())
-        ax.set_title(f"{sid.split('_')[0]}\nβ = {f['slope']:.2f} ± {f['se']:.2f}, R² = {f['r2']:.2f}",
+        _log_axes(ax)
+        ax.set_title(f"{sid.split('_')[0]}: β {two['beta_short']:.2f} → {two['beta_long']:.2f}\n"
+                     f"break {1000 * two['break_s']:.0f} ms, ΔBIC {two['delta_bic']:.0f}",
                      fontsize=plots.BASE_FONT - 4, color=colors[g])
     for ax in axes[-1]:
         ax.set_xlabel("W (ms)")
     for ax in axes[:, 0]:
         ax.set_ylabel("FF(W)")
-    fig.suptitle(f"Fano factor curves and log-log OLS fits, {band} (title color = group)")
+    fig.suptitle(f"Fano factor curves, {band}: one slope (grey dashed) vs two slopes with break point (black); "
+                 "ΔBIC > 6 strongly favours two regimes")
     _save(fig, out_png)
 
 
@@ -248,9 +292,20 @@ def main():
             if len(sig):
                 print(sig.round(4).to_string(index=False))
     if "ff_beta" in metrics:
-        plot_fano_slope(res["details"], metrics, bands, colors, d / "fano_slope.png")
+        table = fano_table(res["details"])
+        plot_fano_slope(res["details"], table, bands, colors, d / "fano_slope.png")
         for b in bands:
-            plot_fano_subjects(res["details"], metrics, b, colors, d / f"fano_fit_{b}.png")
+            plot_fano_subjects(res["details"], table, b, colors, d / f"fano_fit_{b}.png")
+        cols = ["beta_one", "beta_short", "beta_long", "break_ms", "delta_bic"]
+        tests = pd.concat([compare_groups(table[table.band == b], cols).assign(band=b) for b in bands],
+                          ignore_index=True)
+        summary = table.groupby(["band", "group"], sort=False)[cols + ["r2_one", "r2_two"]].median().reset_index()
+        save_tables_excel({"fano_two_slopes": table, "group_tests": tests, "group_medians": summary},
+                          out / "fano_two_slopes.xlsx")
+        print("\n=== Fano two slopes: group medians ===")
+        print(summary.round(3).to_string(index=False))
+        print("\n=== Fano two slopes: Mann-Whitney (p_fdr across the 5 columns of each band) ===")
+        print(tests[["band", "metric", "p", "p_fdr"]].round(4).to_string(index=False))
     # replaced by branching_ratio.png and fano_slope.png
     for old in ("sigma_bins", "sigma_geometric", "sigma_ancestors", "ff_beta"):
         (d / f"{old}.png").unlink(missing_ok=True)

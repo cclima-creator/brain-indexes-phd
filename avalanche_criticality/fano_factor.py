@@ -68,3 +68,52 @@ def fano_curve(events, sfreq, windows_s=None, n_windows=15, min_count=10):
         lr = stats.linregress(np.log10(ws[ok]), np.log10(ff[ok]))
         beta, beta_se = float(lr.slope), float(lr.stderr)
     return dict(windows_s=ws, ff=ff, beta=beta, beta_se=beta_se)
+
+
+def fano_two_slopes(windows_s, ff, min_points=3, n_grid=200):
+    """
+    Two-regime fit of the Fano curve: continuous broken line in log-log ("broken stick"),
+        y = a + b1 x                       for x < x0
+        y = a + b1 x0 + b2 (x - x0)        for x >= x0          (x = log10 W, y = log10 FF)
+    The break point x0 is searched on a grid between the min_points-th window from each end
+    (at least min_points windows per segment); for each x0 the line is an ordinary least
+    squares fit on the basis [1, x, max(x - x0, 0)], and the x0 with the smallest residual
+    sum of squares is kept.
+    Model comparison with the single line (fano_curve's beta): BIC with k = 2 (one line) and
+    k = 4 (intercept, two slopes, break point); delta_bic = BIC_one - BIC_two > 0 favours two
+    regimes (> 6: strong, > 10: very strong; Kass & Raftery 1995).
+    Returns dict(beta_short, beta_long, break_s, intercept, delta_bic, r2_one, r2_two, beta_one).
+    """
+    w, f = np.asarray(windows_s, float), np.asarray(ff, float)
+    ok = np.isfinite(f) & (f > 0) & (w > 0)
+    x, y = np.log10(w[ok]), np.log10(f[ok])
+    out = dict(beta_short=np.nan, beta_long=np.nan, break_s=np.nan, intercept=np.nan,
+               delta_bic=np.nan, r2_one=np.nan, r2_two=np.nan, beta_one=np.nan)
+    n = x.size
+    if n < 2 * min_points:
+        return out
+    sst = float(((y - y.mean()) ** 2).sum())
+    one = np.polyfit(x, y, 1)
+    sse_one = float(((y - np.polyval(one, x)) ** 2).sum())
+    best = None
+    for x0 in np.linspace(x[min_points - 1], x[n - min_points], n_grid):
+        A = np.column_stack([np.ones(n), x, np.clip(x - x0, 0, None)])
+        coef, *_ = np.linalg.lstsq(A, y, rcond=None)
+        sse = float(((y - A @ coef) ** 2).sum())
+        if best is None or sse < best[0]:
+            best = (sse, x0, coef)
+    sse_two, x0, (a, b1, b2) = best
+    tiny = 1e-12                                   # avoids log(0) for a perfect fit
+    bic = lambda sse, k: n * np.log(max(sse, tiny) / n) + k * np.log(n)
+    out.update(beta_short=float(b1), beta_long=float(b1 + b2), break_s=float(10 ** x0),
+               intercept=float(a), delta_bic=float(bic(sse_one, 2) - bic(sse_two, 4)),
+               r2_one=1 - sse_one / sst if sst > 0 else np.nan,
+               r2_two=1 - sse_two / sst if sst > 0 else np.nan, beta_one=float(one[0]))
+    return out
+
+
+def two_slope_curve(fit, windows_s):
+    """FF predicted by a fano_two_slopes fit at windows_s (for the figures)."""
+    x, x0 = np.log10(np.asarray(windows_s, float)), np.log10(fit["break_s"])
+    y = fit["intercept"] + fit["beta_short"] * x + (fit["beta_long"] - fit["beta_short"]) * np.clip(x - x0, 0, None)
+    return 10 ** y

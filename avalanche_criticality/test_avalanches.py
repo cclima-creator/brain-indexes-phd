@@ -14,7 +14,7 @@ from avalanche_criticality.branching_ratio import (branching_ratio_bins, branchi
                                                    avalanche_profiles)
 from avalanche_criticality import power_law as pl
 from avalanche_criticality.repertoire import repertoire, hamming_matrix, shared_repertoire
-from avalanche_criticality.fano_factor import fano_factor
+from avalanche_criticality.fano_factor import fano_factor, fano_two_slopes, two_slope_curve
 
 
 def _branching_process(m=1.0, n_av=4000, max_t=2000, seed=0):
@@ -131,6 +131,21 @@ def test_fano_poisson_is_one():
     ev = np.random.default_rng(6).poisson(2.0, 200_000)
     ff, mu, var = fano_factor(ev, 1)
     assert abs(ff - 1) < 0.05
+
+
+def test_fano_two_slopes_finds_break():
+    # known broken curve in log-log: slope 0.1 up to 50 ms, then 0.7, with small noise
+    rng = np.random.default_rng(7)
+    w = np.logspace(np.log10(0.01), np.log10(1.2), 15)
+    x, x0 = np.log10(w), np.log10(0.05)
+    y = 0.6 + 0.1 * x + 0.6 * np.clip(x - x0, 0, None) + rng.normal(0, 0.01, w.size)
+    fit = fano_two_slopes(w, 10 ** y)
+    assert abs(fit["beta_short"] - 0.1) < 0.05 and abs(fit["beta_long"] - 0.7) < 0.05
+    assert 0.035 < fit["break_s"] < 0.07 and fit["delta_bic"] > 10
+    assert np.allclose(two_slope_curve(fit, w), 10 ** y, rtol=0.05)
+    # straight line: the two slopes are close and the break point is not supported
+    straight = fano_two_slopes(w, 10 ** (0.5 + 0.4 * x + rng.normal(0, 0.01, w.size)))
+    assert abs(straight["beta_short"] - straight["beta_long"]) < 0.1 and straight["delta_bic"] < 6
 
 
 if __name__ == "__main__":
