@@ -6,9 +6,9 @@ subjects by group, Mann-Whitney p and FDR across the bands of that index
 (descriptive_analysis/index_figures.py). The thematic figures A1-A15 stay in plot_ips_avalan.py.
 
 The branching ratio is shown differently, as in figA7: per_index/branching_ratio.png has one row
-per estimator (bins, geometric, ancestors), one column per band, sigma vs time bin (sweep 4-35 ms,
-plus the band's own avalanche bin as an open diamond), mean +- SEM per group, stars = Mann-Whitney
-with FDR over the time bins of that band and estimator.
+per estimator (bins, geometric, ancestors), one column per band, sigma vs time bin (4-30 ms,
+BR_BIN_RANGE_MS), mean +- SEM per group, stars = Mann-Whitney with FDR over the time bins of that
+band and estimator, + = p < 0.05 uncorrected; tests in branching_ratio_bin_tests_4_30ms.xlsx.
 
 The Fano curve FF(W) bends in log-log (flat at short windows, steeper at long ones), so it is
 fitted with two slopes and a break point (avalanche_criticality.fano_factor.fano_two_slopes):
@@ -67,79 +67,66 @@ ESTIMATORS = [("sigma_bins", "σ bins\n(Beggs & Plenz; Maschke)"),
               ("sigma_ancestors", "σ ancestors\n(Beggs & Plenz, 2nd/1st bin)")]
 
 
-def branching_long(br, metrics):
-    """Sweep table (bin_ms 4-35) + the band's own avalanche bin from the metrics table (own_bin = True)."""
-    cols = ["group", "subject", "band"] + [c for c, _ in ESTIMATORS]
-    sweep = br[cols + ["bin_ms"]].assign(own_bin=False)
-    own = metrics[cols + ["time_bin_ms"]].rename(columns={"time_bin_ms": "bin_ms"}).assign(own_bin=True)
-    return pd.concat([sweep, own], ignore_index=True)
+BR_BIN_RANGE_MS = (4, 30)          # time bins shown and tested (sweep of MAIN_IPS_AVALAN: 4-35 ms)
 
 
-def bin_tests(long, groups):
+def bin_tests(br, groups):
     """Mann-Whitney per band, estimator and time bin; p_fdr = FDR over the bins of that band and estimator."""
     rows = []
-    for b, db in long.groupby("band", sort=False):
+    for b, db in br.groupby("band", sort=False):
         for est, _ in ESTIMATORS:
             part = []
-            for (ms, own), d in db.groupby(["bin_ms", "own_bin"]):
+            for ms, d in db.groupby("bin_ms"):
                 x = [d.loc[d.group == g, est].dropna().values for g in groups]
                 if min(len(v) for v in x) >= 2:
-                    part.append(dict(band=b, estimator=est, bin_ms=ms, own_bin=own,
-                                     p=stats.mannwhitneyu(*x).pvalue))
+                    part.append(dict(band=b, estimator=est, bin_ms=ms, p=stats.mannwhitneyu(*x).pvalue,
+                                     **{f"median_{g}": float(np.median(v)) for g, v in zip(groups, x)}))
             for r, q in zip(part, fdr_bh(np.array([r["p"] for r in part]))):
                 r["p_fdr"] = q
             rows += part
     return pd.DataFrame(rows)
 
 
-def plot_branching(br, metrics, bands, colors, out_png):
-    """All three sigma estimators vs time bin, one panel per estimator x band (as figA7)."""
-    groups = [g for g in colors if g in set(metrics.group)]
-    long = branching_long(br, metrics)
-    tests = bin_tests(long, groups) if len(groups) == 2 else pd.DataFrame()
+def plot_branching(br, bands, colors, out_png, bin_range=BR_BIN_RANGE_MS):
+    """
+    All three sigma estimators vs time bin (bin_range, ms), one panel per estimator x band (as figA7).
+    Above each bin: * / ** / *** = p_fdr < 0.05 / 0.01 / 0.001 (FDR over the bins of that panel);
+    + = p < 0.05 uncorrected only.
+    """
+    br = br[(br.bin_ms >= bin_range[0]) & (br.bin_ms <= bin_range[1])]
+    groups = [g for g in colors if g in set(br.group)]
+    tests = bin_tests(br, groups) if len(groups) == 2 else pd.DataFrame()
     fig, axes = plt.subplots(len(ESTIMATORS), len(bands), figsize=(3.4 * len(bands), 3.3 * len(ESTIMATORS)),
                              squeeze=False, sharex=True)
     for i, (est, ylab) in enumerate(ESTIMATORS):
         for j, b in enumerate(bands):
             ax = axes[i, j]
-            db = long[long.band == b]
+            db = br[br.band == b]
             for k, g in enumerate(groups):
-                dg = db[db.group == g]
-                off = 1 + 0.03 * (k - 0.5)                 # small horizontal offset between groups
-                sw = dg[~dg.own_bin].groupby("bin_ms")[est]
-                m, se = sw.mean(), sw.std() / np.sqrt(sw.count())
-                ax.errorbar(m.index * off, m.values, yerr=se.values, color=colors[g], marker="o", ms=3.5,
-                            lw=1.4, capsize=2, label=_label(g))
-                ob = dg[dg.own_bin].groupby("bin_ms")[est]
-                mo, so = ob.mean(), ob.std() / np.sqrt(ob.count())
-                ax.errorbar(mo.index * off, mo.values, yerr=so.values, color=colors[g], marker="D", ms=6,
-                            mfc="none", mew=1.5, ls="none", capsize=2,
-                            label="band's avalanche bin" if k == 0 else None)
+                d = db[db.group == g].groupby("bin_ms")[est]
+                m, se = d.mean(), d.std() / np.sqrt(d.count())
+                ax.errorbar(m.index + 0.25 * (k - 0.5), m.values, yerr=se.values, color=colors[g], marker="o",
+                            ms=3.5, lw=1.4, capsize=2, label=_label(g))
             ax.axhline(1, color="k", ls="--", lw=1)
-            own_ms = db.loc[db.own_bin, "bin_ms"].iloc[0] if db.own_bin.any() else None
-            if own_ms is not None:
-                ax.axvline(own_ms, color="0.6", ls=":", lw=1)
             if len(tests):
                 t = tests[(tests.band == b) & (tests.estimator == est)]
                 d = db.groupby(["bin_ms", "group"])[est]
                 top = (d.mean() + d.std() / np.sqrt(d.count())).groupby("bin_ms").max()
-                for ms, q in zip(t.bin_ms, t.p_fdr):
-                    star = _stars(q).replace("n.s.", "")
-                    if star and ms in top.index:
-                        ax.text(ms, top[ms], star, ha="center", va="bottom", fontsize=plots.BASE_FONT - 4)
-            ax.set_xscale("log")
-            ax.set_xticks([1, 2, 4, 8, 16, 32])
-            ax.xaxis.set_major_formatter(ScalarFormatter())
-            ax.xaxis.set_minor_formatter(NullFormatter())
+                for ms, p, q in zip(t.bin_ms, t.p, t.p_fdr):
+                    mark = _stars(q).replace("n.s.", "") or ("+" if p < 0.05 else "")
+                    if mark and ms in top.index:
+                        ax.text(ms, top[ms], mark, ha="center", va="bottom", fontsize=plots.BASE_FONT - 4)
+            ax.set_xlim(bin_range[0] - 1.5, bin_range[1] + 1.5)
             if i == 0:
-                ax.set_title(f"{b}\n(avalanche bin {own_ms:.2f} ms)" if own_ms else b)
+                ax.set_title(b)
             if i == len(ESTIMATORS) - 1:
                 ax.set_xlabel("time bin (ms)")
             if j == 0:
                 ax.set_ylabel(ylab)
     axes[0, 0].legend(fontsize=plots.BASE_FONT - 4)
-    fig.suptitle("Branching ratio vs time bin, three estimators (mean ± SEM; open diamond = band's avalanche bin; "
-                 "* p_fdr < 0.05, Mann-Whitney, FDR over time bins)")
+    fig.suptitle(f"Branching ratio vs time bin ({bin_range[0]}-{bin_range[1]} ms), three estimators "
+                 "(mean ± SEM; * p_fdr < 0.05, FDR over the time bins of each panel; + p < 0.05 uncorrected; "
+                 "Mann-Whitney)")
     _save(fig, out_png)
     return tests
 
@@ -285,8 +272,9 @@ def main():
             plot_index_bands(metrics, col, lab, bands, colors, d / f"{col}.png",
                              title=f"{lab} per band (Mann-Whitney; FDR across bands)")
     if res.get("br") is not None and len(res["br"]):
-        tests = plot_branching(res["br"], metrics, bands, colors, d / "branching_ratio.png")
+        tests = plot_branching(res["br"], bands, colors, d / "branching_ratio.png")
         if len(tests):
+            save_tables_excel({"branching_ratio_tests": tests}, out / "branching_ratio_bin_tests_4_30ms.xlsx")
             sig = tests[tests.p_fdr < 0.05]
             print(f"branching ratio: {len(sig)} band x estimator x bin with p_fdr < 0.05")
             if len(sig):
