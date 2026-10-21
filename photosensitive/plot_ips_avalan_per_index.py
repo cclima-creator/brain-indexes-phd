@@ -9,6 +9,12 @@ The branching ratio is shown differently, as in figA7: per_index/branching_ratio
 per estimator (bins, geometric, ancestors), one column per band, sigma vs time bin (sweep 4-35 ms,
 plus the band's own avalanche bin as an open diamond), mean +- SEM per group, stars = Mann-Whitney
 with FDR over the time bins of that band and estimator.
+
+The Fano factor slope (ff_beta) is shown with its fits:
+  per_index/fano_slope.png        per band: FF(W) of every subject with its OLS fit in log-log,
+                                  group mean curve with the fit of the mean; below, beta per group
+                                  (Mann-Whitney p, FDR across bands)
+  per_index/fano_fit_<band>.png   one panel per subject: points, fit line, beta +- SE and R^2
 """
 import sys
 from pathlib import Path
@@ -28,7 +34,8 @@ from photosensitive import config_ips_avalan as cfg
 from photosensitive.report import load_results
 from photosensitive.plot_ips_avalan import find_results
 from descriptive_analysis import plots
-from descriptive_analysis.index_figures import plot_index_bands
+from descriptive_analysis.index_figures import plot_index_bands, band_tests
+from descriptive_analysis.plots import _box_by_group
 from descriptive_analysis.plots import _save, _label, _stars
 from descriptive_analysis.summary_stats import fdr_bh
 
@@ -47,7 +54,7 @@ INDEX_LABELS = {
     "duration_pct_in_range": "% avalanches in power-law range (T)",
     "size_mse": "log-log MSE (S)", "duration_mse": "log-log MSE (T)",
     "repertoire_rate": "repertoire (unique patterns / s)", "repertoire_per_avalanche": "unique patterns / avalanches",
-    "diversity_mean": "pattern diversity (mean Hamming)", "ff": "Fano factor", "ff_beta": "Fano factor slope β",
+    "diversity_mean": "pattern diversity (mean Hamming)", "ff": "Fano factor",
 }
 
 ESTIMATORS = [("sigma_bins", "σ bins\n(Beggs & Plenz; Maschke)"),
@@ -132,6 +139,92 @@ def plot_branching(br, metrics, bands, colors, out_png):
     return tests
 
 
+def fano_fit(curve):
+    """OLS of log10 FF on log10 W (FF > 0), as fano_factor.fano_curve: dict(w, ff, ok, slope, intercept, se, r2)."""
+    w, ff = np.asarray(curve["windows_s"]), np.asarray(curve["ff"])
+    ok = np.isfinite(ff) & (ff > 0)
+    if ok.sum() < 3:
+        return None
+    lr = stats.linregress(np.log10(w[ok]), np.log10(ff[ok]))
+    return dict(w=w, ff=ff, ok=ok, slope=lr.slope, intercept=lr.intercept, se=lr.stderr, r2=lr.rvalue ** 2)
+
+
+def _fit_line(ax, f, color, **kw):
+    x = np.array([f["w"][f["ok"]].min(), f["w"][f["ok"]].max()])
+    ax.plot(1000 * x, 10 ** (f["intercept"] + f["slope"] * np.log10(x)), color=color, **kw)
+
+
+def plot_fano_slope(details, metrics, bands, colors, out_png):
+    """Per band: FF(W) curves + fits (top) and beta per group (bottom)."""
+    groups = [g for g in colors if g in set(metrics.group)]
+    tests = band_tests(metrics, "ff_beta", bands)
+    fig, axes = plt.subplots(2, len(bands), figsize=(3.5 * len(bands), 7.4), squeeze=False)
+    for j, b in enumerate(bands):
+        ax = axes[0, j]
+        for g in groups:
+            fits = [fano_fit(det["fano_curve"]) for (gg, sid, bb), det in details.items() if gg == g and bb == b]
+            fits = [f for f in fits if f is not None]
+            for f in fits:
+                ax.plot(1000 * f["w"], f["ff"], "o", color=colors[g], ms=2, alpha=0.35)
+                _fit_line(ax, f, colors[g], lw=0.8, alpha=0.45)
+            if fits:
+                n = min(f["w"].size for f in fits)
+                logff = np.nanmean([np.log10(np.where(f["ff"][:n] > 0, f["ff"][:n], np.nan)) for f in fits], 0)
+                mean = fano_fit(dict(windows_s=fits[0]["w"][:n], ff=10 ** logff))
+                ax.plot(1000 * mean["w"], mean["ff"], "o", color=colors[g], ms=5, mec="k", mew=0.5)
+                _fit_line(ax, mean, colors[g], lw=2.6,
+                          label=f"{_label(g)}: β = {np.median([f['slope'] for f in fits]):.2f} (median)")
+        ax.axhline(1, color="k", ls="--", lw=1)
+        ax.set_xscale("log")
+        ax.set_yscale("log")
+        ax.xaxis.set_minor_formatter(NullFormatter())
+        ax.yaxis.set_minor_formatter(NullFormatter())
+        ax.set_title(b)
+        ax.set_xlabel("window W (ms)")
+        ax.legend(fontsize=plots.BASE_FONT - 5, loc="upper left")
+        bx = axes[1, j]
+        _box_by_group(bx, metrics[metrics.band == b], "ff_beta", colors, "Fano slope β" if j == 0 else "")
+        q = tests.get(b, (np.nan, np.nan))[1]
+        bx.set_title(f"{bx.get_title()}\nFDR q = {q:.3f}" if np.isfinite(q) else bx.get_title(),
+                     fontsize=plots.BASE_FONT - 1)
+    axes[0, 0].set_ylabel("FF(W)")
+    fig.suptitle("Fano factor curve FF(W) ~ W^β: thin = each subject (points + OLS fit), thick = fit of "
+                 "the group mean (log10 average); β > 0 = correlations at long time scales")
+    _save(fig, out_png)
+
+
+def plot_fano_subjects(details, metrics, band, colors, out_png, ncols=6):
+    """One panel per subject in one band: FF(W) points, OLS fit, beta +- SE, R^2."""
+    keys = [(g, sid) for g in colors for (gg, sid, bb) in details if gg == g and bb == band]
+    if not keys:
+        return
+    nrows = int(np.ceil(len(keys) / ncols))
+    fig, axes = plt.subplots(nrows, ncols, figsize=(3.0 * ncols, 2.7 * nrows), squeeze=False,
+                             sharex=True, sharey=True)
+    for ax in axes.ravel()[len(keys):]:
+        ax.axis("off")
+    for ax, (g, sid) in zip(axes.ravel(), keys):
+        f = fano_fit(details[(g, sid, band)]["fano_curve"])
+        if f is None:
+            ax.set_title(f"{sid.split('_')[0]}: no fit", fontsize=plots.BASE_FONT - 4)
+            continue
+        ax.plot(1000 * f["w"][f["ok"]], f["ff"][f["ok"]], "o", color=colors[g], ms=4)
+        _fit_line(ax, f, "k", lw=1.2)
+        ax.axhline(1, color="0.5", ls="--", lw=0.8)
+        ax.set_xscale("log")
+        ax.set_yscale("log")
+        ax.xaxis.set_minor_formatter(NullFormatter())
+        ax.yaxis.set_minor_formatter(NullFormatter())
+        ax.set_title(f"{sid.split('_')[0]}\nβ = {f['slope']:.2f} ± {f['se']:.2f}, R² = {f['r2']:.2f}",
+                     fontsize=plots.BASE_FONT - 4, color=colors[g])
+    for ax in axes[-1]:
+        ax.set_xlabel("W (ms)")
+    for ax in axes[:, 0]:
+        ax.set_ylabel("FF(W)")
+    fig.suptitle(f"Fano factor curves and log-log OLS fits, {band} (title color = group)")
+    _save(fig, out_png)
+
+
 def main():
     channel_set, _, out_root = base.choose_channel_set()      # same choice as MAIN_IPS_AVALAN
     out = find_results(cfg.results_dir(channel_set, out_root))
@@ -154,7 +247,12 @@ def main():
             print(f"branching ratio: {len(sig)} band x estimator x bin with p_fdr < 0.05")
             if len(sig):
                 print(sig.round(4).to_string(index=False))
-    for old in ("sigma_bins", "sigma_geometric", "sigma_ancestors"):    # replaced by branching_ratio.png
+    if "ff_beta" in metrics:
+        plot_fano_slope(res["details"], metrics, bands, colors, d / "fano_slope.png")
+        for b in bands:
+            plot_fano_subjects(res["details"], metrics, b, colors, d / f"fano_fit_{b}.png")
+    # replaced by branching_ratio.png and fano_slope.png
+    for old in ("sigma_bins", "sigma_geometric", "sigma_ancestors", "ff_beta"):
         (d / f"{old}.png").unlink(missing_ok=True)
     print("Figures saved in:", d)
 
