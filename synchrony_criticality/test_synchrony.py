@@ -122,6 +122,27 @@ def test_lag_insensitive_ignores_zero_lag_mixing():
     assert np.allclose(mats["wpli"], ml["wpli"]) and ep["wpli"].shape == (2,)
 
 
+def test_regional_within_between():
+    from synchrony_criticality.regional import region_indices, within_between, regional_kuramoto
+    ch = ["Fp1", "Fp2", "O1", "O2", "T5"]                                # T5 = P7
+    idx = region_indices(ch, {"front": ["FP1", "fp2"], "back": ["O1", "O2", "P7"], "none": ["Cz"]})
+    assert idx == {"front": [0, 1], "back": [2, 3, 4]}
+    m = np.full((5, 5), 0.2)
+    m[np.ix_([2, 3, 4], [2, 3, 4])] = 0.9                               # strong coupling at the back
+    np.fill_diagonal(m, 1)
+    wb = within_between(m, idx)
+    assert np.isclose(wb[("back", "back")], 0.9) and np.isclose(wb[("front", "front")], 0.2)
+    assert np.isclose(wb[("front", "back")], 0.2)
+    # back channels share one phase, front channels are random: within back R = 1, within front low
+    rng = np.random.default_rng(8)
+    n_t = 4000
+    common = np.linspace(0, 200, n_t)
+    ph = np.stack([rng.uniform(-np.pi, np.pi, n_t), rng.uniform(-np.pi, np.pi, n_t), common, common, common])
+    k = regional_kuramoto(ph[None], idx)
+    assert np.isclose(k[("back", "back")][0], 1) and np.isclose(k[("back", "back")][1], 0, atol=1e-9)
+    assert k[("front", "front")][0] < 0.8 and k[("front", "back")][0] < 0.8
+
+
 if __name__ == "__main__":
     for name, f in list(globals().items()):
         if name.startswith("test_"):

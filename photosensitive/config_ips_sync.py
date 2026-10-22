@@ -40,6 +40,15 @@ DECIMATE_PLOT = 8                 # R(t) and PLV(t) kept for the figures every 8
 # PLI, wPLI, dwPLI, iCOH use only the lagged part of the coupling (synchrony_criticality/lag_insensitive.py).
 INDICES = ("kuramoto", "pc", "plv", "ppc", "pli", "wpli", "dwpli", "icoh")
 
+# ---- scalp regions for the within- / between-region analysis (MAIN_IPS_SYNC_REGIONS.py);
+# 10-20 names of this montage (T3 = T7, T4 = T8, T5 = P7, T6 = P8 are matched automatically)
+REGIONS = {"frontopolar": ["Fp1", "Fp2", "AF7", "AF8"],
+           "frontal": ["F7", "F3", "Fz", "F4", "F8"],
+           "central": ["C3", "Cz", "C4"],
+           "temporal": ["T3", "T4", "T5", "T6"],
+           "parietal": ["P3", "Pz", "P4"],
+           "occipital": ["O1", "O2"]}
+
 # ---- group statistics
 ALPHA = 0.05                      # significance for the edge-wise tests and the figures
 MIN_SUBJECTS_PER_FREQ = 3         # stim-frequency tests only with >= 3 subjects per group
