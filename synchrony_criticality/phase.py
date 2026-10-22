@@ -1,5 +1,9 @@
 # -*- coding: utf-8 -*-
 """
+codice generico per calcolar efase usando trasformata di hilbert per i dati grezzi. la fase viene poi usata da molti 
+indici di sincronizzazione.
+ci sono degli smoothing e filtri necessari per pulizia matematica
+
 Instantaneous phase of band-limited EEG, common to every synchrony index.
 
     raw EEG (epochs x channels x samples)
