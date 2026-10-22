@@ -29,8 +29,11 @@ from photosensitive.io_eeg import discover_files, load_epochs, get_data_uv
 from photosensitive.report import check_output_dir, save_tables_excel, load_results, FALLBACK_DIR
 from photosensitive.MAIN_IPS import pick_channels
 from photosensitive.MAIN_IPS_AVALAN import band_filter
-from photosensitive.plot_ips_avalan import _band_boxes
+import matplotlib.pyplot as plt
+
+from photosensitive.plot_ips_avalan import _save
 from descriptive_analysis import plots
+from descriptive_analysis.plots import _box_by_group, _stars
 from descriptive_analysis.summary_stats import compare_groups
 from avalanche_criticality.binarization import zscore_channels, avalanches_from_epochs
 from avalanche_criticality.repertoire import repertoire
@@ -98,6 +101,35 @@ def load_or_run(fpath, group, channels, cache_dir):
     return rows
 
 
+def plot_index(wide, tests, col, lab, bands, colors, out_png):
+    """
+    Una figura per indice: righe = bin, colonne = bande, box per gruppo (plots._box_by_group).
+    Titolo di ogni pannello: p di Mann-Whitney non corretto e p_FDR (Benjamini-Hochberg sugli indici
+    testati nella stessa banda e nello stesso bin, foglio group_tests); asterischi dal p_FDR.
+    """
+    fig, axes = plt.subplots(len(BINS_MS), len(bands), figsize=(3.1 * len(bands), 3.5 * len(BINS_MS)),
+                             squeeze=False)
+    for i, ms in enumerate(BINS_MS):
+        c = f"{col}_{ms}ms"
+        for j, b in enumerate(bands):
+            ax = axes[i, j]
+            d = wide[wide.band == b]
+            if c not in d or d[c].notna().sum() == 0:
+                ax.axis("off")
+                continue
+            _box_by_group(ax, d, c, colors, f"{lab}\n{ms} ms bin" if j == 0 else "")
+            t = tests[(tests.band == b) & (tests.bin_ms == ms) & (tests.metric == col)] if len(tests) else []
+            if len(t):
+                p, q = t["p"].iloc[0], t["p_fdr"].iloc[0]
+                ax.set_title(f"{b}\np = {p:.3f}, p_FDR = {q:.3f} {_stars(q)}", fontsize=plots.BASE_FONT - 2)
+            else:
+                ax.set_title(b, fontsize=plots.BASE_FONT - 2)
+    fig.suptitle(f"{lab.replace(chr(10), ' ')} with fixed time bins {', '.join(map(str, BINS_MS))} ms (rows) "
+                 "per band (columns)\nMann-Whitney U; p_FDR = Benjamini-Hochberg over the indices tested "
+                 "in the same band and bin; stars from p_FDR")
+    _save(fig, out_png)
+
+
 def main():
     channel_set, channels, out_root = base.choose_channel_set()
     out_dir = check_output_dir(av.results_dir(channel_set, out_root) / OUT_NAME, ["bin_comparison.xlsx"],
@@ -141,10 +173,7 @@ def main():
     bands = list(av.BANDS)
     plots.paper_style()
     for col, lab, name in INDICES:
-        _band_boxes(wide, [(f"{col}_{ms}ms", f"{lab}\n{ms} ms bin") for ms in BINS_MS], bands, colors,
-                    out_dir / f"{name}.png",
-                    f"{lab.replace(chr(10), ' ')} with fixed time bins {', '.join(map(str, BINS_MS))} ms "
-                    "(rows) per band (columns); Mann-Whitney U")
+        plot_index(wide, tests, col, lab, bands, colors, out_dir / f"{name}.png")
     if len(tests):
         print("\n=== Test tra gruppi (Mann-Whitney, p_fdr dentro banda e bin), solo p < 0.05 ===")
         sig = tests[tests.p < 0.05]
