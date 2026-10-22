@@ -121,7 +121,8 @@ def plot_index(wide, tests, col, lab, bands, colors, out_png):
             t = tests[(tests.band == b) & (tests.bin_ms == ms) & (tests.metric == col)] if len(tests) else []
             if len(t):
                 p, q = t["p"].iloc[0], t["p_fdr"].iloc[0]
-                ax.set_title(f"{b}\np = {p:.3f}, p_FDR = {q:.3f} {_stars(q)}", fontsize=plots.BASE_FONT - 2)
+                fmt = lambda v: "< 0.001" if v < 0.001 else f"= {v:.3f}"
+                ax.set_title(f"{b}\np {fmt(p)}, p_FDR {fmt(q)} {_stars(q)}", fontsize=plots.BASE_FONT - 2)
             else:
                 ax.set_title(b, fontsize=plots.BASE_FONT - 2)
     fig.suptitle(f"{lab.replace(chr(10), ' ')} with fixed time bins {', '.join(map(str, BINS_MS))} ms (rows) "
