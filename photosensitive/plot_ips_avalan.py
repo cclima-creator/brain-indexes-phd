@@ -454,7 +454,7 @@ MODEL_SHORT = {"power_law": "PL", "truncated_power_law": "TPL", "lognormal": "LN
                "exponential": "Exp", "stretched_exponential": "SExp"}
 
 
-def plot_distribution_table(summ, bands, colors, out_png):
+def plot_distribution_table(summ, bands, colors, out_png, title_extra=""):
     """
     figA15: una tabella per le dimensioni S e una per le durate T. Righe = banda x gruppo.
     Colonne: % di valanghe nel range power law (mediana [IQR], tratto arancio della fig. A3),
@@ -497,7 +497,8 @@ def plot_distribution_table(summ, bands, colors, out_png):
                     if vals[j - 3] == max(vals) and max(vals) > 0:
                         c.set_text_props(weight="bold")
         ax.set_title(title, fontsize=plots.BASE_FONT + 1, loc="left", pad=4)
-    fig.suptitle("How the avalanche distributions are fitted: share in the power-law range and best model\n"
+    fig.suptitle("How the avalanche distributions are fitted: share in the power-law range and best model"
+                 + (f" — {title_extra}" if title_extra else "") + "\n"
                  "(PL power law, TPL truncated power law, LN lognormal, Exp exponential, SExp stretched exponential; "
                  "Vuong / nested LR tests, p < 0.05; xmin = minimum of the data)", fontsize=plots.BASE_FONT)
     _save(fig, out_png)
