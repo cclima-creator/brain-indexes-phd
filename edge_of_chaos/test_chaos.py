@@ -117,6 +117,50 @@ def test_covariance_width_and_lambda():
     assert np.isnan(ci.compute_covariance_width(d[:1])["width"])      # needs >= 2 epochs
 
 
+def _linear_network(N, rho, n_ep, n_t, rng):
+    """x(t+1) = W x(t) + noise, W random with spectral radius rho; (n_ep, N, n_t)."""
+    W = rng.normal(0, 1 / np.sqrt(N), (N, N))
+    W *= rho / np.abs(np.linalg.eigvals(W)).max()
+    x = np.zeros((n_ep, N, n_t + 200))
+    for t in range(1, x.shape[-1]):
+        x[:, :, t] = x[:, :, t - 1] @ W.T + rng.normal(size=(n_ep, N))
+    return x[:, :, 200:]
+
+
+def test_integrated_covariance_recovers_lambda():
+    rng = np.random.default_rng(11)
+    for rho in (0.5, 0.8):
+        x = _linear_network(60, rho, 40, 4000, rng)
+        C, S = ci.integrated_covariance(x, 1.0, window_s=200)
+        lam = ci.lambda_from_width(ci.dahmen_width(C), 60)
+        assert abs(lam - rho) < 0.1, (rho, lam)
+        assert S.shape == (60, 40 * 20)
+
+
+def test_integrated_covariance_vanishes_after_high_pass():
+    """The edgeofpy problem: band-passing removes the power at 0 Hz, so mean(C_ii) -> ~0."""
+    rng = np.random.default_rng(12)
+    x = _linear_network(20, 0.8, 20, 4000, rng)
+    hp = ci.broadband(x, 100.0, (1.0, 45.0))                 # band-pass + 1 s edge trimming
+    C_raw, _ = ci.integrated_covariance(ci.trim_edges(x, 100.0, 1.0), 100.0, window_s=10)
+    C_hp, _ = ci.integrated_covariance(hp, 100.0, window_s=10)
+    assert np.diag(C_hp).mean() < 0.05 * np.diag(C_raw).mean()
+    assert hp.var() > 0.5 * x.var()                           # the ordinary variance is kept
+
+
+def test_covariance_width_dahmen_envelope_and_events():
+    rng = np.random.default_rng(13)
+    x = ci.bandpass_filter(rng.normal(size=(12, 8, int(12 * SF))), SF, (8, 13))
+    env = ci.band_envelope(x, SF, (8, 13))
+    r = ci.compute_covariance_width_dahmen(env, SF, "envelope")
+    assert r["mean_diag"] > 0 and np.isfinite(r["width"]) and 0 <= r["lambda_max"] < 1
+    assert r["cov"].shape == (8, 8) and np.allclose(r["cov"], r["cov"].T)
+    e = ci.compute_covariance_width_dahmen(x, SF, "events", threshold_sd=2.0)
+    assert e["mean_diag"] > 0 and e["event_rate"] > 0
+    ev = ci.event_trains(x, 2.0)
+    assert set(np.unique(ev)) <= {0, 1} and ev.shape == x.shape
+
+
 def test_rosenstein_lle_sign():
     lle_chaos = ci.compute_lyapunov_exponent(logistic(4.0, 2000), method="rosenstein")["lle"]
     assert lle_chaos > 0
@@ -151,11 +195,13 @@ def test_pipeline_end_to_end():
             assert len(subj) == 6
             for col in ("k_lp8_broadband", "k_broadband", "k_alpha", "lzc_broadband", "lzc_gamma",
                         "katz_fd_theta", "renyi_h2_beta", "mse_auc_delta", "aperiodic_exponent_broadband",
-                        "dfa_alpha", "dfa_broadband", "lambda_max_broadband", "cov_width_alpha",
+                        "dfa_alpha", "dfa_broadband", "lambda_max_env_broadband", "cov_width_env_alpha",
                         "entropy_production_broadband"):
                 assert col in subj and subj[col].notna().all(), col
             # synthetic noise has no LRTC (DFA <= 0.6): fE/I is NaN by construction
             assert "fei_alpha" in subj
+            # near-Gaussian noise has no 3 SD excursions: no events, event-count width is NaN
+            assert "lambda_max_evt_beta" in subj and "cov_width_evt_broadband" in subj
             # steeper spectrum in group B
             assert subj.loc[subj.group == "B", "aperiodic_exponent_broadband"].min() > \
                 subj.loc[subj.group == "A", "aperiodic_exponent_broadband"].max()

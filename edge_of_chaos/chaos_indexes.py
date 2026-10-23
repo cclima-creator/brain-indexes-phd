@@ -14,14 +14,20 @@ Edge-of-chaos and complexity indexes. Generic functions on numpy arrays (no data
 | compute_entropy_production       | entropy production (Lynn 2021)| direct implementation         |
 | compute_dfa                      | DFA exponent alpha            | neurokit2                     |
 | compute_fei_ratio                | fE/I (Bruining 2020)          | port of the NBT/crosci code   |
-| compute_covariance_width         | width of the covariance matrix| edgeofpy                      |
+| compute_covariance_width         | width of the covariance matrix| edgeofpy (legacy, see below)  |
+| compute_covariance_width_dahmen  | width and lambda_max on       | direct implementation         |
+|                                  | envelopes or event counts     |                               |
 
 NOTE on lambda_max: edgeofpy.lambda_max is NOT the largest Lyapunov exponent of the time series.
 It is the largest eigenvalue of the effective connectivity estimated from the dispersion of the
 (integrated, time-lagged) covariances across channel pairs (Dahmen et al. 2019, PNAS):
-    lambda_max = sqrt(1 - sqrt(1 / (1 + N * width^2))),   width = std(C) / mean(diag(C))
+    lambda_max = sqrt(1 - sqrt(1 / (1 + N * width^2))),   width = std(C_ij) / mean(C_ii)
 lambda_max -> 1 is the edge of chaos (linear stability boundary of the network). The classical
 largest Lyapunov exponent of one channel (Rosenstein 1993) is available with method="rosenstein".
+The integrated covariance is the cross-spectrum at 0 Hz: it vanishes on band-passed signals, so
+the edgeofpy version (compute_covariance_width) is not defined on filtered EEG. The width is
+computed instead on amplitude envelopes or event counts (compute_covariance_width_dahmen), from
+the covariance of window sums as in Dahmen et al. (spike counts in long windows).
 
 Input conventions: x = one channel (1-D array); data = (n_epochs, n_channels, n_times).
 """
@@ -146,6 +152,91 @@ def compute_covariance_width(data):
     # trial length = n_t samples exactly (s_freq = 1): edgeofpy reshapes back into the epochs
     _, width, cov = lambda_max(concat_epochs(data).astype(float), 1, n_ch, trial_len_sec=n_t)
     return dict(width=float(width), cov=cov)
+
+
+def window_sums(x, sfreq, window_s=1.0):
+    """
+    Sum of x in consecutive non-overlapping windows of window_s inside every epoch (the last,
+    incomplete window is dropped). x: (n_epochs, n_channels, n_times) -> (n_epochs, n_channels, n_windows).
+    For an event train the sums are event counts, as the spike counts of Dahmen et al. 2019.
+    """
+    n_ep, n_ch, n_t = x.shape
+    L = int(round(window_s * sfreq))
+    n_w = n_t // L
+    if n_w < 1:
+        raise ValueError(f"window of {window_s} s longer than the epoch")
+    return x[..., :n_w * L].reshape(n_ep, n_ch, n_w, L).sum(-1)
+
+
+def integrated_covariance(x, sfreq, window_s=1.0, demean_epochs=True):
+    """
+    Integrated (zero-frequency) covariance matrix from window sums:
+        S_i(k) = sum of x_i over window k (L samples)
+        C_ij   = Cov_k(S_i, S_j) / L  =  sum over |tau| < L of (1 - |tau|/L) c_ij(tau)
+    i.e. the sum of the cross-covariance over lags, with triangular (Bartlett) weights; it tends
+    to the cross-spectrum at 0 Hz for long windows. demean_epochs: the window sums are centred
+    within each epoch (removes slow differences between epochs / conditions).
+    x must have power at 0 Hz (amplitude envelopes, event trains): for a band-passed signal
+    C -> 0. Returns (C (n_channels, n_channels), S pooled (n_channels, n_windows total)).
+    """
+    S = window_sums(np.asarray(x, float), sfreq, window_s)
+    n_ep, n_ch, n_w = S.shape
+    if demean_epochs:
+        S = S - S.mean(-1, keepdims=True)
+        dof = n_ep * n_w - n_ep
+    else:
+        S = S - S.mean((0, 2), keepdims=True)
+        dof = n_ep * n_w - 1
+    S = S.transpose(1, 0, 2).reshape(n_ch, -1)
+    L = int(round(window_s * sfreq))
+    return S @ S.T / max(dof, 1) / L, S
+
+
+def dahmen_width(C):
+    """
+    Normalized dispersion of the cross-covariances (Dahmen et al. 2019):
+        w = SD(C_ij, i != j) / mean(C_ii)
+    (edgeofpy uses the SD over all entries, diagonal included).
+    """
+    off = C[~np.eye(len(C), dtype=bool)]
+    return float(off.std(ddof=1) / np.diag(C).mean())
+
+
+def event_trains(x, threshold_sd=3.0):
+    """
+    0/1 event train per channel: one event at the peak of every excursion beyond +-threshold_sd
+    (z-score per channel over all epochs; avalanche_criticality.binarization.binarize, mode
+    "peak"). x: (n_epochs, n_channels, n_times) band-passed signal -> int8 array, same shape.
+    """
+    from avalanche_criticality.binarization import zscore_channels, binarize
+    z = zscore_channels(x)
+    return np.stack([binarize(z[e], threshold_sd, mode="peak") for e in range(len(z))])
+
+
+def compute_covariance_width_dahmen(x, sfreq, signal="envelope", window_s=1.0, threshold_sd=3.0,
+                                    n_units=None, demean_epochs=True):
+    """
+    Covariance width and lambda_max on a signal with power at 0 Hz (the fix of the edgeofpy
+    version, whose integrated covariance vanishes on band-passed EEG):
+      signal="envelope": x = amplitude envelope (n_epochs, n_channels, n_times)
+      signal="events"  : x = band-passed signal, turned into event trains (event_trains)
+    Returns dict(width, lambda_max, cov, mean_diag, sd_offdiag, mean_offdiag, n_windows,
+    event_rate (events/s per channel, events only)).
+    """
+    x = np.asarray(x, float)
+    rate = np.nan
+    if signal == "events":
+        x = event_trains(x, threshold_sd).astype(float)
+        rate = float(x.sum() / (x.shape[0] * x.shape[1] * x.shape[2] / sfreq))
+    elif signal != "envelope":
+        raise ValueError("signal must be 'envelope' or 'events'")
+    C, S = integrated_covariance(x, sfreq, window_s, demean_epochs)
+    off = C[~np.eye(len(C), dtype=bool)]
+    w = dahmen_width(C)
+    n = len(C) if n_units is None else n_units
+    return dict(width=w, lambda_max=lambda_from_width(w, n) if np.isfinite(w) else np.nan, cov=C,
+                mean_diag=float(np.diag(C).mean()), sd_offdiag=float(off.std(ddof=1)),
+                mean_offdiag=float(off.mean()), n_windows=S.shape[1], event_rate=rate)
 
 
 def lambda_from_width(width, n_units):

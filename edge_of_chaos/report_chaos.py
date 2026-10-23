@@ -20,11 +20,14 @@ from descriptive_analysis.topography import unify_channel_names
 
 META = {"group", "subject", "channel", "epoch", "label", "n_channels", "n_epochs", "duration_s",
         "sfreq", "aperiodic_offset", "aperiodic_r2"}
+# diagnostics of the covariance width (kept in subject_metrics, not tested or plotted)
+META_PREFIX = ("cov_mean_diag_", "cov_sd_offdiag_", "cov_mean_offdiag_", "event_rate_")
 
 
 def metric_columns(df):
     """Numeric columns that are measures (not bookkeeping)."""
-    return [c for c in df.columns if c not in META and pd.api.types.is_numeric_dtype(df[c])]
+    return [c for c in df.columns if c not in META and not c.startswith(META_PREFIX)
+            and pd.api.types.is_numeric_dtype(df[c])]
 
 
 def group_summary(df, metrics, group_col="group"):

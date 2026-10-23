@@ -32,7 +32,11 @@ from edge_of_chaos.report_chaos import metric_columns
 BAND_ORDER = ["broadband", "delta", "theta", "alpha", "beta", "gamma"]
 LABELS = {"lzc": "Lempel-Ziv complexity", "katz_fd": "Katz FD", "renyi_h2": "Rényi H$_2$ (nats)",
           "mse_auc": "MSE (mean over scales)", "aperiodic_exponent": "aperiodic exponent β",
-          "lambda_max": "λ$_{max}$ (Dahmen)", "cov_width": "covariance width",
+          "lambda_max": "λ$_{max}$ (edgeofpy, band signal)", "cov_width": "covariance width (edgeofpy, band signal)",
+          "lambda_max_env": "λ$_{max}$ (Dahmen), amplitude envelope",
+          "cov_width_env": "covariance width, amplitude envelope",
+          "lambda_max_evt": "λ$_{max}$ (Dahmen), event counts",
+          "cov_width_evt": "covariance width, event counts",
           "entropy_production": "entropy production (nats/step)",
           "entropy_production_per_s": "entropy production (nats/s)",
           "k": "0-1 test K", "dfa": "DFA α (amplitude envelope)", "fei": "fE/I",
@@ -41,6 +45,10 @@ LABELS = {"lzc": "Lempel-Ziv complexity", "katz_fd": "Katz FD", "renyi_h2": "Ré
 NOTES = {"aperiodic_exponent": "Fit of the whole 2-40 Hz spectrum: one value, not defined per band.",
          "cov_width": "Integrated covariance ~0 on band-passed signals: width not reliable (see README).",
          "lambda_max": "Computed from the covariance width: not reliable on band-passed signals.",
+         "cov_width_env": "w = SD(C_ij) / mean(C_ii), C = covariance of 1 s sums of the envelope.",
+         "lambda_max_env": "From the envelope covariance width; N = number of channels.",
+         "cov_width_evt": "w = SD(C_ij) / mean(C_ii), C = covariance of event counts in 1 s windows.",
+         "lambda_max_evt": "From the event-count covariance width; N = number of channels.",
          "k": "K of the band-passed signal; narrow bands are quasi-periodic, so K is lower there.",
          "fei": "fE/I is NaN where DFA α <= 0.6 (no long-range temporal correlations)."}
 

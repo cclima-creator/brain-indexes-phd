@@ -49,9 +49,18 @@ K_DOWNSAMPLE = "minmax"       # keep only local minima/maxima (Toker 2022); None
 K_IMPL = "fast"               # "fast" = vectorized (FFT) version in chaos_indexes.py,
                               # "edgeofpy" = edgeofpy.chaos.z1_chaos_test (same algorithm, slow)
 
-# ---- covariance width / lambda_max (Dahmen et al. 2019, edgeofpy.lambda_max)
+# ---- covariance width / lambda_max (Dahmen et al. 2019)
 LAMBDA_N_UNITS = None         # N in lambda_max = sqrt(1 - sqrt(1 / (1 + N * width^2))):
                               # None = number of channels
+# The integrated covariance is the cross-spectrum at 0 Hz, which band-passing removes: the
+# edgeofpy estimate on the filtered signal is not defined (mean(C_ii) ~ 0, sign at random).
+# The width is computed on signals that keep power at 0 Hz, from the covariance of window sums
+# (chaos_indexes.compute_covariance_width_dahmen); columns cov_width_<sig>_<band>, lambda_max_<sig>_<band>
+LAMBDA_SIGNALS = ["envelope", "events"]   # "envelope" (env), "events" (evt); add "edgeofpy" for the
+                                          # old estimate on the band signal (cov_width_<band>)
+LAMBDA_WINDOW_S = 1.0         # window of the sums (s): C = Cov(window sums) / L
+LAMBDA_EVENT_SD = 3.0         # events: peak of every excursion beyond +-3 SD (per channel)
+LAMBDA_DEMEAN_EPOCHS = True   # window sums centred within each epoch
 
 # ---- Lempel-Ziv complexity (neurokit2)
 LZC_SYMBOLIZE = "median"      # binarization of the signal before the LZ76 count
@@ -100,7 +109,8 @@ def params():
     """Parameters that change the results: if different from the cached ones, the subject is redone."""
     names = ["SFREQ", "BROADBAND", "BANDS", "SIGNAL_BANDS", "FILTER_ORDER", "EDGE_TRIM_S", "CONCATENATE_EPOCHS",
              "MAX_EPOCHS", "MEASURES", "K_LOWPASS_HZ", "K_SIGMA", "K_N_C", "K_DENOISE",
-             "K_DOWNSAMPLE", "K_IMPL", "LAMBDA_N_UNITS", "LZC_SYMBOLIZE", "PSD_SEGMENT_S",
+             "K_DOWNSAMPLE", "K_IMPL", "LAMBDA_N_UNITS", "LAMBDA_SIGNALS", "LAMBDA_WINDOW_S",
+             "LAMBDA_EVENT_SD", "LAMBDA_DEMEAN_EPOCHS", "LZC_SYMBOLIZE", "PSD_SEGMENT_S",
              "APERIODIC_FRANGE", "APERIODIC_MODE", "RENYI_ALPHA", "RENYI_BINS", "MSE_SCALES",
              "MSE_DIMENSION", "MSE_TOLERANCE", "MSE_METHOD", "EP_N_STATES", "EP_LAG_S",
              "EP_PSEUDOCOUNT", "SEED", "DFA_FIT_S", "DFA_N_SCALES", "DFA_OVERLAP",

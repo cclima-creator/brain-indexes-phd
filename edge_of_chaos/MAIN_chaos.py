@@ -17,7 +17,8 @@ Database MAIN (e.g. autism/MAIN_AUT_CHAOS.py):
 Pipeline per subject (data in uV, (n_epochs, n_channels, n_times)), for every signal of
 SIGNAL_BANDS (broadband 1-45 Hz, delta ... gamma), columns <measure>_<band>:
   band-pass, 1 s edge trimming -> per epoch and channel: LZC, Katz FD, Renyi H2, MSE
-                               -> whole montage: covariance width, lambda_max, entropy production
+                               -> whole montage: covariance width and lambda_max on the amplitude envelope
+                                  and on event counts (Dahmen 2019), entropy production
                                -> 0-1 chaos test K per channel (epochs concatenated); broadband
                                   also low-passed at each K_LOWPASS_HZ (k_lp<cutoff>_broadband)
   amplitude envelope           -> DFA alpha, fE/I per channel (epochs concatenated)
@@ -41,7 +42,7 @@ if str(ROOT) not in sys.path:
 from edge_of_chaos import config_chaos as default_cfg
 from edge_of_chaos import chaos_indexes as ci
 from edge_of_chaos.io_chaos import (discover_files, load_subject, check_output_dir, save_results,
-                                    load_cached_subject, save_tables_excel)
+                                    load_cached_subject, save_tables_excel, load_results)
 
 warnings.filterwarnings("ignore")
 
@@ -61,6 +62,51 @@ def _mean_over(signals, f):
 
 
 # ================================================================== ONE SUBJECT
+LAMBDA_TAG = {"envelope": "env", "events": "evt"}
+LAMBDA_PARAMS = {"LAMBDA_N_UNITS", "LAMBDA_SIGNALS", "LAMBDA_WINDOW_S", "LAMBDA_EVENT_SD",
+                 "LAMBDA_DEMEAN_EPOCHS"}
+
+
+def lambda_band(x, env, sf, bname, cfg):
+    """
+    Covariance width and lambda_max of one signal band for every cfg.LAMBDA_SIGNALS:
+    x = band-passed signal, env = its amplitude envelope, both (n_epochs, n_channels, n_times).
+    Returns (whole-montage values, details): cov_width_<env|evt>_<band>, lambda_max_<env|evt>_<band>
+    (+ mean_diag, sd_offdiag, mean_offdiag, event rate), and cov_width_<band> / lambda_max_<band>
+    for the old edgeofpy estimate if "edgeofpy" is listed.
+    """
+    glob, detail = {}, {}
+    for sig in cfg.LAMBDA_SIGNALS:
+        if sig == "edgeofpy":
+            cw = ci.compute_covariance_width(x)
+            glob[f"cov_width_{bname}"] = cw["width"]
+            glob[f"lambda_max_{bname}"] = ci.compute_lyapunov_exponent(x, cfg.LAMBDA_N_UNITS, cw["width"])["lambda_max"]
+            continue
+        r = ci.compute_covariance_width_dahmen(env if sig == "envelope" else x, sf, sig, cfg.LAMBDA_WINDOW_S,
+                                               cfg.LAMBDA_EVENT_SD, cfg.LAMBDA_N_UNITS, cfg.LAMBDA_DEMEAN_EPOCHS)
+        t = LAMBDA_TAG[sig]
+        glob.update({f"cov_width_{t}_{bname}": r["width"], f"lambda_max_{t}_{bname}": r["lambda_max"],
+                     f"cov_mean_diag_{t}_{bname}": r["mean_diag"], f"cov_sd_offdiag_{t}_{bname}": r["sd_offdiag"],
+                     f"cov_mean_offdiag_{t}_{bname}": r["mean_offdiag"]})
+        if sig == "events":
+            glob[f"event_rate_{t}_{bname}"] = r["event_rate"]
+        detail[f"cov_{t}_{bname}"] = r["cov"].astype(np.float32)
+    return glob, detail
+
+
+def analyze_lambda(sub, cfg):
+    """Only the covariance-width / lambda_max measures of one subject (to update a cached subject)."""
+    data, sf = sub["data"], sub["sfreq"]
+    glob, detail = {}, {}
+    for bname, band in signal_bands(cfg).items():
+        x = ci.broadband(data, sf, band, cfg.FILTER_ORDER, cfg.EDGE_TRIM_S)
+        env = ci.band_envelope(data, sf, band, cfg.FILTER_ORDER, cfg.EDGE_TRIM_S)
+        g, d = lambda_band(x, env, sf, bname, cfg)
+        glob.update(g)
+        detail.update(d)
+    return glob, detail
+
+
 def signal_bands(cfg):
     """Signals every measure is computed on: {"broadband": BROADBAND, delta: ..., ...} (SIGNAL_BANDS)."""
     return {name: (cfg.BROADBAND if name == "broadband" else cfg.BANDS[name]) for name in cfg.SIGNAL_BANDS}
@@ -151,12 +197,9 @@ def analyze_subject(sub, cfg, group, sid):
         # ---- whole montage
         if {"covariance_width", "lyapunov_exponent"} & want:
             t0 = time.time()
-            cw = ci.compute_covariance_width(x)
-            glob[f"cov_width_{bname}"] = cw["width"]
-            if "lyapunov_exponent" in want:
-                glob[f"lambda_max_{bname}"] = ci.compute_lyapunov_exponent(x, cfg.LAMBDA_N_UNITS, cw["width"])["lambda_max"]
-            if bname == "broadband":
-                detail["cov"] = cw["cov"].astype(np.float32)
+            g, d = lambda_band(x, ci.band_envelope(data, sf, band, o, tr), sf, bname, cfg)
+            glob.update(g)
+            detail.update(d)
             tick("cov_lambda", t0)
         if "entropy_production" in want:
             t0 = time.time()
@@ -187,6 +230,18 @@ def analyze_subject(sub, cfg, group, sid):
     return dict(row=row, chans=chan_rows, epochs=epochs, detail=detail, ch_names=ch)
 
 
+def _only_lambda_changed(cache, params):
+    """True if the cache exists and differs from params only in the lambda settings."""
+    if not Path(cache).exists():
+        return False
+    try:
+        old = load_results(cache).get("params", {})
+    except Exception:
+        return False
+    diff = {k for k in set(old) | set(params) if old.get(k) != params.get(k)}
+    return bool(diff) and diff <= LAMBDA_PARAMS
+
+
 def _cfg_state(cfg):
     """Upper-case settings of a config module (to rebuild it in a worker process)."""
     return {k: getattr(cfg, k) for k in dir(cfg) if k.isupper()}
@@ -195,15 +250,25 @@ def _cfg_state(cfg):
 def _analyze_file(job):
     """
     Worker (one process per subject when n_jobs > 1): rebuilds the config from its settings,
-    loads, analyses and caches one file. job = (path, group, cache, params, cfg_state, load_kw).
+    loads, analyses and caches one file. job = (path, group, cache, params, cfg_state, load_kw,
+    patch); patch = only the lambda settings changed: just those measures are recomputed into the cache.
     """
-    path, group, cache, params, state, load_kw = job
+    path, group, cache, params, state, load_kw, patch = job
     from edge_of_chaos import config_chaos as cfg
     for k, v in state.items():
         setattr(cfg, k, v)
     t0 = time.time()
     sub = load_subject(path, sfreq=cfg.SFREQ, max_epochs=cfg.MAX_EPOCHS, **load_kw)
-    res = analyze_subject(sub, cfg, group, Path(path).stem)
+    if patch:                       # cached with other lambda settings only: redo just those
+        res = load_results(cache)
+        glob, detail = analyze_lambda(sub, cfg)
+        lam = ("cov_", "lambda_max_", "event_rate_")
+        res["row"] = {k: v for k, v in res["row"].items() if not k.startswith(lam)}
+        res["row"].update(glob)
+        res["detail"] = {k: v for k, v in res["detail"].items() if not k.startswith("cov")}
+        res["detail"].update(detail)
+    else:
+        res = analyze_subject(sub, cfg, group, Path(path).stem)
     res["params"] = params
     save_results(res, cache)
     print(f"  {Path(path).stem} done in {time.time() - t0:.0f} s", flush=True)
@@ -239,7 +304,10 @@ def run(groups, out_dir, cfg=default_cfg, colors=None, pattern="*.set", fixed_le
             if not cfg.OVERWRITE and load_cached_subject(cache, params) is not None:
                 print(f"  {f.stem} (cache)")
             else:
-                jobs.append((str(f), group, cache, params, _cfg_state(cfg), load_kw))
+                patch = not cfg.OVERWRITE and _only_lambda_changed(cache, params)
+                if patch:
+                    print(f"  {f.stem} (cache, lambda measures to update)")
+                jobs.append((str(f), group, cache, params, _cfg_state(cfg), load_kw, patch))
     print(f"\n{len(jobs)} subjects to analyse, {n_jobs} parallel process(es)", flush=True)
     if n_jobs > 1 and len(jobs) > 1:
         import os
