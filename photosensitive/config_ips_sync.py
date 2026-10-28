@@ -13,7 +13,7 @@ COLORS = base.COLORS
 OUT_SUBDIR = "synchrony"         # used only if OUT_ROOT = None: results in OUT_DIR/synchrony
 # results folder, next to criticality_results: OUT_ROOT (all channels) or OUT_ROOT/occipital
 # (visual ROI). None = inside the preliminary-analysis folder (OUT_DIR/synchrony)
-OUT_ROOT = Path(r"C:\Users\Chiara Clima\Desktop\eeg preprocess criticality\syncron_results")
+OUT_ROOT = Path(r"C:\Users\Chiara Clima\Desktop\eeg preprocess photosensitive\syncron_results")
 
 # ---- bands: broadband 1-45 Hz (as the other analyses) and the narrow bands delta 1-4, theta 4-8,
 # alpha 8-13, beta 13-30, gamma 30-45 Hz. CAUTION: the Hilbert phase is well defined only for

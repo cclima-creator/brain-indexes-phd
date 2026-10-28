@@ -13,7 +13,7 @@ COLORS = base.COLORS
 OUT_SUBDIR = "avalanches"        # usato solo se OUT_ROOT = None: risultati in OUT_DIR/avalanches
 # cartella dei risultati delle valanghe (tutti i canali; la ROI occipitale va in OUT_ROOT/occipital).
 # None = dentro la cartella dell'analisi preliminare (OUT_DIR/avalanches)
-OUT_ROOT = Path(r"C:\Users\Chiara Clima\Desktop\eeg preprocess criticality\criticality_results")
+OUT_ROOT = Path(r"C:\Users\Chiara Clima\Desktop\eeg preprocess photosensitive\criticality_results")
 
 # ---- binarizzazione (Maschke et al. 2024; Shriki et al. 2013)
 # soglia in SD dal punto in cui la distribuzione degli z-score si stacca dalla gaussiana

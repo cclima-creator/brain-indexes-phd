@@ -6,7 +6,7 @@ Renyi entropy, multiscale entropy, entropy production, DFA, fE/I, aperiodic expo
 Same files, groups, excluded subjects and channel choice as the other IPS analyses (config_ips.py).
 
 Results (Excel, pickle, per-subject cache in subjects/, figures in figures/) in
-<eeg preprocess criticality>/edge_of_chaos_results, next to criticality_results and
+<eeg preprocess photosensitive>/edge_of_chaos_results, next to criticality_results and
 syncron_results (edge_of_chaos_results/occipital for the visual ROI).
 Settings: defaults of edge_of_chaos/config_chaos.py, overridden below for this database.
 To redo everything: OVERWRITE = True below.
@@ -22,7 +22,7 @@ from photosensitive import config_ips as base
 from edge_of_chaos import config_chaos as cfg
 from edge_of_chaos.MAIN_chaos import run
 
-OUT_ROOT = Path(r"C:\Users\Chiara Clima\Desktop\eeg preprocess criticality\edge_of_chaos_results")
+OUT_ROOT = Path(r"C:\Users\Chiara Clima\Desktop\eeg preprocess photosensitive\edge_of_chaos_results")
 
 # ---- overrides of config_chaos for the IPS database
 cfg.BANDS = dict(base.BANDS)          # same bands as the other IPS analyses

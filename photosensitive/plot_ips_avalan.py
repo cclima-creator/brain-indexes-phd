@@ -454,18 +454,23 @@ MODEL_SHORT = {"power_law": "PL", "truncated_power_law": "TPL", "lognormal": "LN
                "exponential": "Exp", "stretched_exponential": "SExp"}
 
 
-def plot_distribution_table(summ, bands, colors, out_png, title_extra=""):
+def plot_distribution_table(summ, bands, colors, out_png, title_extra="",
+                            variables=(("size", "Avalanche size S"), ("duration", "Avalanche duration T")),
+                            what="avalanches", heading=None):
     """
-    figA15: una tabella per le dimensioni S e una per le durate T. Righe = banda x gruppo.
-    Colonne: % di valanghe nel range power law (mediana [IQR], tratto arancio della fig. A3),
+    figA15: una tabella per variabile (default: dimensioni S e durate T). Righe = banda x gruppo.
+    Colonne: % di dati nel range power law (mediana [IQR], tratto arancio della fig. A3),
     decadi del range, soggetti con power law plausibile (Clauset p >= 0.1), quante volte ogni
     modello e' il migliore (confronti di Vuong), quanti con confidenza forte e quanti ambigui.
+    variables: (colonna 'variable' di summ, titolo della tabella); what: cosa conta la % (prima colonna).
     """
     from matplotlib.colors import to_rgba
-    cols = (["% avalanches\nin PL range\nmedian [IQR]", "decades\n(median)", "PL plausible\n(p ≥ 0.1)"]
+    cols = ([f"% {what}\nin PL range\nmedian [IQR]", "decades\n(median)", "PL plausible\n(p ≥ 0.1)"]
             + [f"best:\n{MODEL_SHORT[m]}" for m in MODEL_SHORT] + ["strong\nconfidence", "ambiguous"])
-    fig, axes = plt.subplots(2, 1, figsize=(17, 2.2 + 0.42 * 2 * len(bands) * 2))
-    for ax, var, title in zip(axes, ("size", "duration"), ("Avalanche size S", "Avalanche duration T")):
+    fig, axes = plt.subplots(len(variables), 1, figsize=(17, 1.1 + 0.42 * 2 * len(bands) * len(variables)),
+                             squeeze=False)
+    axes = axes[:, 0]
+    for ax, (var, title) in zip(axes, variables):
         ax.axis("off")
         cells, labels, row_colors = [], [], []
         for b in bands:
@@ -497,10 +502,11 @@ def plot_distribution_table(summ, bands, colors, out_png, title_extra=""):
                     if vals[j - 3] == max(vals) and max(vals) > 0:
                         c.set_text_props(weight="bold")
         ax.set_title(title, fontsize=plots.BASE_FONT + 1, loc="left", pad=4)
-    fig.suptitle("How the avalanche distributions are fitted: share in the power-law range and best model"
-                 + (f" — {title_extra}" if title_extra else "") + "\n"
+    fig.suptitle((heading or "How the avalanche distributions are fitted: share in the power-law range and best model"
+                  + (f" — {title_extra}" if title_extra else "")) + "\n"
                  "(PL power law, TPL truncated power law, LN lognormal, Exp exponential, SExp stretched exponential; "
-                 "Vuong / nested LR tests, p < 0.05; xmin = minimum of the data)", fontsize=plots.BASE_FONT)
+                 "Vuong / nested LR tests, p < 0.05"
+                 + ("; xmin = minimum of the data)" if heading is None else ")"), fontsize=plots.BASE_FONT)
     _save(fig, out_png)
 
 

@@ -157,12 +157,14 @@ def _grid_alpha_discrete(sum_log, n, xmins):
     return F[nll.argmin(0), np.arange(len(xmins))]
 
 
-def find_xmin(x, discrete=True, min_tail=30):
+def find_xmin(x, discrete=True, min_tail=30, max_candidates=150):
     """
     Fit di Clauset: xmin che minimizza D tra i valori distinti dei dati con almeno min_tail
     osservazioni >= xmin. Ritorna (xmin, alpha, alpha_se, D, n_tail).
     Discreta: alpha di ogni candidato da una griglia fine (passo 0.001) per la scelta di xmin,
     poi MLE esatta sull'xmin scelto.
+    Continua: se i valori distinti sono piu' di max_candidates, i candidati sono max_candidates
+    quantili dei dati (con dati continui ogni valore e' distinto e provarli tutti e' troppo lento).
     """
     x = np.sort(np.asarray(x, dtype=float))
     x = x[x > 0]
@@ -185,7 +187,10 @@ def find_xmin(x, discrete=True, min_tail=30):
         c = float(u[np.argmin(ds)])
         a, se, n = mle_alpha(x, c, None, True)
         return c, a, se, ks_distance(x, a, c, None, True), n
-    for c in np.unique(x):
+    cand = np.unique(x)
+    if cand.size > max_candidates:                    # continui: candidati ai quantili (veloce)
+        cand = np.unique(np.quantile(x[:max(x.size - min_tail, 1)], np.linspace(0, 1, max_candidates)))
+    for c in cand:
         if np.sum(x >= c) < min_tail:
             break
         a, se, n = mle_alpha(x, c, None, discrete)
@@ -506,14 +511,23 @@ def compare_all_distributions(x, xmin="min", discrete=True, alpha=0.05):
     ll = {}
     a, _, _ = mle_alpha(t, xm, None, discrete)
     ll["power_law"] = -a * np.log(t) - np.log(_norm(a, xm, None, discrete))
-    ta, tl, _ = fit_truncated_power_law(t, xm)
-    if np.isfinite(tl):
-        ll["truncated_power_law"] = -ta * np.log(t) - tl * t - np.log(_tpl_norm(ta, tl, xm))
-        out["tpl_cutoff"] = 1 / tl if tl > 0 else np.inf
+    if discrete:                                      # troncata discreta: fit di questo modulo (veloce)
+        ta, tl, _ = fit_truncated_power_law(t, xm)
+        if np.isfinite(tl):
+            ll["truncated_power_law"] = -ta * np.log(t) - tl * t - np.log(_tpl_norm(ta, tl, xm))
+            out["tpl_cutoff"] = 1 / tl if tl > 0 else np.inf
     with warnings.catch_warnings(), np.errstate(all="ignore"):
         warnings.simplefilter("ignore")
         fit = powerlaw.Fit(t, xmin=xm, discrete=discrete, verbose=False)
-        for m in ("lognormal", "exponential", "stretched_exponential"):
+        others = ("lognormal", "exponential", "stretched_exponential")
+        if not discrete:                              # dati continui: troncata del pacchetto (gia' veloce)
+            others = ("truncated_power_law",) + others
+            try:
+                lam = float(fit.truncated_power_law.Lambda)
+                out["tpl_cutoff"] = 1 / lam if lam > 0 else np.inf
+            except Exception:
+                pass
+        for m in others:
             try:
                 v = np.asarray(getattr(fit, m).loglikelihoods(t), dtype=float)
                 if np.all(np.isfinite(v)):
