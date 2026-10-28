@@ -46,11 +46,12 @@ warnings.filterwarnings("ignore")
 OUT_NAME = "amplitude_distribution"
 N_SAMPLES = 5000                   # campioni |z| per soggetto e banda (a caso, seed fisso)
 SEED = 0
+FIT_VERSION = 2                    # 2: power law troncata continua scritta qui (bug del pacchetto powerlaw)
 OVERWRITE = False
 
 
 def params():
-    return dict(N_SAMPLES=N_SAMPLES, SEED=SEED, BANDS=av.BANDS, N_BOOT=av.N_BOOT, N_SIM=av.N_SIM,
+    return dict(FIT_VERSION=FIT_VERSION, N_SAMPLES=N_SAMPLES, SEED=SEED, BANDS=av.BANDS, N_BOOT=av.N_BOOT, N_SIM=av.N_SIM,
                 MIN_TAIL=av.MIN_TAIL, FIXED_LENGTH_S=base.FIXED_LENGTH_S, ANALYSIS_WINDOW=base.ANALYSIS_WINDOW)
 
 
@@ -82,6 +83,7 @@ def analyze_subject(fpath, group, channels):
                          alpha=f.get("alpha"), alpha_range=f.get("alpha_range"), p_gof=f.get("p_gof"),
                          pl_plausible=bool(f.get("plausible")), best_model=c["best"],
                          confidence=c["confidence"], tpl_cutoff=c.get("tpl_cutoff"),
+                         tpl_alpha=c.get("tpl_alpha"), tpl_lambda=c.get("tpl_lambda"),
                          **{k: v for k, v in c.items() if k.startswith(("R_", "p_"))}))
         r = rows[-1]
         print(f"    {band:>10}: xmin {r['xmin']:.2f} SD ({100 * r['frac_tail']:.0f}% in coda) | "

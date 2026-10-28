@@ -404,6 +404,50 @@ def fit_truncated_power_law(x, xmin, k_exact=10_000):
     return float(best.x[0]), float(np.exp(best.x[1])), float(-best.fun)
 
 
+def _tpl_log_norm_continuous(a, lam, xmin):
+    """log Z, Z = integrale da xmin a infinito di x^-a e^(-lambda x) dx (in u = ln x, con quad)."""
+    from scipy.integrate import quad
+    u0 = np.log(xmin)
+    shift = -a * u0 - lam * xmin + u0                 # valore dell'integrando in u0 (log), per stabilita'
+    f = lambda u: np.exp(-a * u - lam * np.exp(u) + u - shift)
+    hi = np.log(xmin + 60 / lam) if lam > 0 else np.inf
+    val, _ = quad(f, u0, hi, limit=200)
+    return np.log(val) + shift if val > 0 else np.inf
+
+
+def fit_truncated_power_law_continuous(x, xmin):
+    """
+    Power law con taglio esponenziale, dati continui, per x >= xmin (MLE):
+        p(x) = x^-a e^(-lambda x) / Z
+    Scritta qui perche' il pacchetto powerlaw (versione 2.0.0) con dati continui e xmin fissato lascia
+    l'esponente al valore iniziale 3.0 (fitta solo lambda), cosi' come la power law semplice.
+    Ritorna (alpha, lambda, log-verosimiglianza, log-verosimiglianze per punto).
+    """
+    from scipy.optimize import minimize
+    t = _tail(x, xmin)
+    n, sum_log, s = t.size, np.log(t).sum(), t.sum()
+    if n < 10:
+        return np.nan, np.nan, np.nan, None
+
+    def nll(p):
+        a, lam = p[0], np.exp(p[1])
+        if not 0 <= a <= 12:
+            return np.inf
+        lz = _tpl_log_norm_continuous(a, lam, xmin)
+        return a * sum_log + lam * s + n * lz if np.isfinite(lz) else np.inf
+
+    a0 = mle_alpha(t, xmin, None, False)[0]
+    best = None
+    for lam0 in (1e-3, 1e-1, 1.0, 10.0):
+        r = minimize(nll, [min(max(a0, 0.5), 10.0), np.log(lam0 / max(t.mean(), 1e-6))],
+                     method="Nelder-Mead", options=dict(xatol=1e-5, fatol=1e-6, maxiter=3000))
+        if best is None or r.fun < best.fun:
+            best = r
+    a, lam = float(best.x[0]), float(np.exp(best.x[1]))
+    ll = -a * np.log(t) - lam * t - _tpl_log_norm_continuous(a, lam, xmin)
+    return a, lam, float(-best.fun), ll
+
+
 def compare_distributions(x, xmin, discrete=True, alternatives=LR_ALTERNATIVES):
     """
     Power law contro distribuzioni alternative, sopra lo stesso xmin (Clauset 2009, sez. 5):
@@ -511,23 +555,21 @@ def compare_all_distributions(x, xmin="min", discrete=True, alpha=0.05):
     ll = {}
     a, _, _ = mle_alpha(t, xm, None, discrete)
     ll["power_law"] = -a * np.log(t) - np.log(_norm(a, xm, None, discrete))
-    if discrete:                                      # troncata discreta: fit di questo modulo (veloce)
+    if discrete:                                      # troncata: fit di questo modulo (non quella del pacchetto)
         ta, tl, _ = fit_truncated_power_law(t, xm)
         if np.isfinite(tl):
             ll["truncated_power_law"] = -ta * np.log(t) - tl * t - np.log(_tpl_norm(ta, tl, xm))
-            out["tpl_cutoff"] = 1 / tl if tl > 0 else np.inf
+    else:
+        ta, tl, _, v = fit_truncated_power_law_continuous(t, xm)
+        if v is not None and np.all(np.isfinite(v)):
+            ll["truncated_power_law"] = v
+    if np.isfinite(tl):
+        out["tpl_cutoff"] = 1 / tl if tl > 0 else np.inf
+        out.update(tpl_alpha=ta, tpl_lambda=tl)
     with warnings.catch_warnings(), np.errstate(all="ignore"):
         warnings.simplefilter("ignore")
         fit = powerlaw.Fit(t, xmin=xm, discrete=discrete, verbose=False)
-        others = ("lognormal", "exponential", "stretched_exponential")
-        if not discrete:                              # dati continui: troncata del pacchetto (gia' veloce)
-            others = ("truncated_power_law",) + others
-            try:
-                lam = float(fit.truncated_power_law.Lambda)
-                out["tpl_cutoff"] = 1 / lam if lam > 0 else np.inf
-            except Exception:
-                pass
-        for m in others:
+        for m in ("lognormal", "exponential", "stretched_exponential"):
             try:
                 v = np.asarray(getattr(fit, m).loglikelihoods(t), dtype=float)
                 if np.all(np.isfinite(v)):
