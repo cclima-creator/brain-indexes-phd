@@ -107,6 +107,8 @@ def run_all(mod_name, module, params, n_jobs=None, overwrite=False):
     """Analyses every needed subject x condition not yet cached. Returns {(cond, sid): result}."""
     n_jobs = n_jobs or cfg.N_JOBS
     units = needed_units()
+    for c, s in units:                      # epoch counts cached here, before the parallel processes
+        io_aya.n_equal(c, s)
     todo = [(c, s) for c, s in units if overwrite or cached(module, c, s, params) is None]
     print(f"{module}: {len(units)} subject x condition, {len(todo)} to analyse, {n_jobs} processes", flush=True)
     jobs = [(mod_name, module, c, s, params) for c, s in todo]

@@ -3,6 +3,7 @@
 Input of the Ayahuasca database: which subjects have which condition, and the epochs of one
 subject in one condition (with the central 27-33 min window cut from the 20-40 slot).
 """
+import os
 import re
 from pathlib import Path
 
@@ -177,10 +178,13 @@ def n_epochs(cond, sid):
             _COUNTS = {}
     if key not in _COUNTS:
         _COUNTS[key] = len(load_condition(real, sid))
-        _counts_file().parent.mkdir(parents=True, exist_ok=True)
-        tmp = _counts_file().with_suffix(".tmp")
-        tmp.write_text(json.dumps(_COUNTS, indent=0))
-        tmp.replace(_counts_file())
+        try:                                # runner.run_all fills the file before the parallel processes
+            _counts_file().parent.mkdir(parents=True, exist_ok=True)
+            tmp = _counts_file().with_name(f"epoch_counts.{os.getpid()}.tmp")
+            tmp.write_text(json.dumps(_COUNTS, indent=0))
+            tmp.replace(_counts_file())
+        except OSError:
+            pass
     return _COUNTS[key]
 
 
