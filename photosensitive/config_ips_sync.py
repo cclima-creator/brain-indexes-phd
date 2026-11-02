@@ -27,6 +27,11 @@ FILTER_ORDER = 4                  # Butterworth order (doubled by the forward-ba
 EDGE_TRIM_S = 1.0                 # seconds removed at both ends of each epoch after Hilbert
                                   # (12 s epochs -> 10 s analysed; 1 s = 1 cycle at 1 Hz)
 
+# ---- lag-insensitive indices from multitaper cross-spectra across epochs (cross_spectral.py)
+MT_NW = 2.0                       # time-half-bandwidth product: 3 DPSS tapers, +-0.2 Hz on 10 s
+# results of this "new method" (2026-11-02) in a subfolder of OUT_ROOT, with NOTE_new_method.txt
+NEW_METHOD_SUBDIR = "new_method"
+
 # ---- Kuramoto (synchrony_criticality/kuramoto.py)
 N_SURROGATES = 20                 # circular-shift surrogates per subject and band (0 = none)
 SEED = 0
@@ -69,4 +74,7 @@ def params():
     return dict(INDICES=INDICES, BANDS=BANDS, FILTER_ORDER=FILTER_ORDER, EDGE_TRIM_S=EDGE_TRIM_S,
                 N_SURROGATES=N_SURROGATES, SEED=SEED, R_HIST_BINS=R_HIST_BINS,
                 R_EXAMPLE_S=R_EXAMPLE_S, DECIMATE_PLOT=DECIMATE_PLOT,
-                FIXED_LENGTH_S=base.FIXED_LENGTH_S, ANALYSIS_WINDOW=base.ANALYSIS_WINDOW)
+                FIXED_LENGTH_S=base.FIXED_LENGTH_S, ANALYSIS_WINDOW=base.ANALYSIS_WINDOW,
+                METHOD="new: filter/Hilbert per run, M over the whole signal, cross-spectra across epochs",
+                MT_NW=MT_NW, PAD_S=base.PAD_S, EQUAL_MODE=base.EQUAL_MODE, EQUAL_DRAWS=base.EQUAL_DRAWS,
+                EQUAL_SEED=base.EQUAL_SEED)

@@ -45,19 +45,8 @@ from photosensitive.report import save_tables_excel
 from avalanche_criticality.fano_factor import fano_two_slopes, two_slope_curve
 
 INDEX_LABELS = {
-    "n_avalanches": "number of avalanches", "avalanche_rate_hz": "avalanche rate (Hz)",
+    "avalanche_rate_hz": "avalanche rate (Hz)",
     "mean_size": "mean size S", "mean_duration_bins": "mean duration T (bins)",
-    "tau": "τ (size exponent)", "alpha": "α (duration exponent)", "third": "1/σνz (fitted)",
-    "dcc": "DCC", "dcc_clauset": "DCC (Clauset xmin)", "tau_range": "τ (power-law range)",
-    "alpha_range": "α (power-law range)", "dcc_range": "DCC (power-law range)",
-    "tau_rigorous": "τ (rigorous)", "alpha_rigorous": "α (rigorous)", "third_rigorous": "1/σνz (rigorous)",
-    "dcc_rigorous": "DCC (rigorous)",
-    "size_p_gof": "power-law p (S)", "duration_p_gof": "power-law p (T)",
-    "size_decades": "power-law range, decades (S)", "duration_decades": "power-law range, decades (T)",
-    "size_xmax_cutoff": "upper cutoff (S)", "duration_xmax_cutoff": "upper cutoff (T)",
-    "size_pct_in_range": "% avalanches in power-law range (S)",
-    "duration_pct_in_range": "% avalanches in power-law range (T)",
-    "size_mse": "log-log MSE (S)", "duration_mse": "log-log MSE (T)",
     "repertoire_rate": "repertoire (unique patterns / s)", "repertoire_per_avalanche": "unique patterns / avalanches",
     "diversity_mean": "pattern diversity (mean Hamming)", "ff": "Fano factor",
 }

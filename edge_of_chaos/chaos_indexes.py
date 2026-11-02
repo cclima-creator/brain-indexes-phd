@@ -357,6 +357,15 @@ def compute_entropy_production(data, sfreq, n_states=8, lag_s=0.01, pseudocount=
     elif data.ndim == 2:
         data = data[None]
     s = _states(data, n_states, seed)
+    return entropy_production_from_states(s, sfreq, n_states, lag_s, pseudocount)
+
+
+def entropy_production_from_states(s, sfreq, n_states=8, lag_s=0.01, pseudocount=0.5):
+    """
+    Entropy production from the discrete states s (n_epochs, n_times) of _states: the states can
+    be fitted once on all the data and the transitions counted on a subset of epochs (the same
+    number of epochs in every condition: the finite-data bias of EP depends on it).
+    """
     lag = max(1, int(round(lag_s * sfreq)))
     C = np.full((n_states, n_states), float(pseudocount))
     for e in range(s.shape[0]):
@@ -389,6 +398,84 @@ def compute_dfa(x, sfreq, fit_s=(1.0, 10.0), n_scales=20, overlap=True):
         return dict(alpha=np.nan, windows=win, fluctuations=np.full(win.size, np.nan))
     alpha, info = _nk().fractal_dfa(x, scale=win, overlap=overlap)
     return dict(alpha=float(alpha), windows=win, fluctuations=np.asarray(info["Fluctuations"]).ravel())
+
+
+def _segment_windows(lengths, n, overlap):
+    """(segment, start) of every window of n samples inside segments of the given lengths."""
+    step = max(1, n // 2) if overlap else n
+    return [(k, s) for k, L in enumerate(lengths) for s in range(0, L - n + 1, step)]
+
+
+def compute_dfa_segments(segments, sfreq, fit_s=(1.0, 10.0), n_scales=20, overlap=True, min_windows=10):
+    """
+    DFA of a signal recorded in separate continuous segments (runs of contiguous epochs): every
+    window lies inside one segment (no window across a gap), the profile is the cumulative sum of
+    the segment minus the mean of all segments, each window is linearly detrended and
+    F(n) = sqrt(mean over ALL windows of the mean squared residual) (Hardstone et al. 2012).
+    A window size is used only if at least min_windows non-overlapping windows fit in the data
+    (the "N/10" rule of a single signal). segments: list of 1-D arrays.
+    Returns dict(alpha, windows (samples), fluctuations); alpha NaN if < 4 window sizes.
+    """
+    segs = [np.asarray(s, float) for s in segments if len(s)]
+    if not segs:
+        return dict(alpha=np.nan, windows=np.array([], int), fluctuations=np.array([]))
+    mu = np.concatenate(segs).mean()
+    prof = [np.cumsum(s - mu) for s in segs]
+    lengths = [len(s) for s in segs]
+    lo, hi = fit_s[0] * sfreq, fit_s[1] * sfreq
+    cand = np.unique(np.round(np.logspace(np.log10(lo), np.log10(hi), n_scales)).astype(int))
+    win = np.array([n for n in cand if sum(L // n for L in lengths) >= min_windows], int)
+    if win.size < 4:
+        return dict(alpha=np.nan, windows=win, fluctuations=np.full(win.size, np.nan))
+    F = []
+    for n in win:
+        t = np.arange(n)
+        Y = np.array([prof[k][s:s + n] for k, s in _segment_windows(lengths, n, overlap)])
+        coef = np.polyfit(t, Y.T, 1)
+        res = Y - (coef[0][:, None] * t + coef[1][:, None])
+        F.append(np.sqrt(np.mean(res ** 2)))
+    F = np.array(F)
+    alpha = np.polyfit(np.log10(win), np.log10(F), 1)[0]
+    return dict(alpha=float(alpha), windows=win, fluctuations=F)
+
+
+def compute_fei_segments(segments, sfreq, window_s=5.0, overlap=0.8, dfa_alpha=None, dfa_threshold=0.6):
+    """
+    fE/I (compute_fei_ratio) of an envelope recorded in separate continuous segments: windows only
+    inside a segment (profile = cumulative sum of the segment minus the mean of all segments),
+    the correlation of wnF and wAmp over the windows of all segments.
+    """
+    segs = [np.asarray(s, float) for s in segments if len(s)]
+    nan = dict(fei=np.nan, w_amp=np.array([]), w_dnf=np.array([]))
+    if not segs:
+        return nan
+    allx = np.concatenate(segs)
+    if allx.min() == allx.max():
+        return nan
+    mu = allx.mean()
+    win = int(round(window_s * sfreq))
+    step = max(1, int(np.floor(win * (1 - overlap))))
+    t = np.arange(win)
+    w_amp, w_dnf = [], []
+    for a in segs:
+        starts = np.arange(0, a.size - win + 1, step)
+        if not starts.size:
+            continue
+        idx = starts[:, None] + t[None, :]
+        profile = np.cumsum(a - mu)
+        amp = a[idx].mean(axis=1)
+        xs = profile[idx] / amp[:, None]
+        coef = np.polyfit(t, xs.T, 1)
+        resid = xs - (coef[0][:, None] * t + coef[1][:, None])
+        w_amp.append(amp)
+        w_dnf.append(np.sqrt((resid ** 2).mean(axis=1)))
+    if not w_amp or sum(len(v) for v in w_amp) < 3:
+        return nan
+    w_amp, w_dnf = np.concatenate(w_amp), np.concatenate(w_dnf)
+    fei = 1 - stats.pearsonr(w_dnf, w_amp)[0]
+    if dfa_alpha is not None and not (dfa_alpha > dfa_threshold):
+        fei = np.nan
+    return dict(fei=float(fei), w_amp=w_amp, w_dnf=w_dnf)
 
 
 def compute_fei_ratio(envelope, sfreq, window_s=5.0, overlap=0.8, dfa_alpha=None,

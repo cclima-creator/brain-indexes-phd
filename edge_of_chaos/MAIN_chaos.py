@@ -15,13 +15,19 @@ Database MAIN (e.g. autism/MAIN_AUT_CHAOS.py):
         fixed_length_s=10.0)
 
 Pipeline per subject (data in uV, (n_epochs, n_channels, n_times)), for every signal of
-SIGNAL_BANDS (broadband 1-45 Hz, delta ... gamma), columns <measure>_<band>:
-  band-pass, 1 s edge trimming -> per epoch and channel: LZC, Katz FD, Renyi H2, MSE
-                               -> whole montage: covariance width and lambda_max on the amplitude envelope
-                                  and on event counts (Dahmen 2019), entropy production
-                               -> 0-1 chaos test K per channel (epochs concatenated); broadband
-                                  also low-passed at each K_LOWPASS_HZ (k_lp<cutoff>_broadband)
-  amplitude envelope           -> DFA alpha, fE/I per channel (epochs concatenated)
+SIGNAL_BANDS (broadband 1-45 Hz, delta ... gamma), columns <measure>_<band>.
+Filters and Hilbert transforms run on every run of contiguous epochs (sub["runs"]; default: every
+epoch is a separate trial), padded by PAD_S s of reflection; EDGE_TRIM_S s are then cut at both
+ends of every epoch (0 for continuous recordings). Nothing is concatenated across a gap.
+  band-pass -> per epoch and channel: LZC, Katz FD, Renyi H2, MSE
+            -> whole montage, on N_EQUAL epochs (sub["n_equal"], mean over EQUAL_DRAWS subsets):
+               covariance width and lambda_max on the amplitude envelope and on event counts
+               (Dahmen 2019), entropy production (states fitted on all epochs)
+            -> 0-1 chaos test K per channel on chunks of K_CHUNK_S s inside the continuous
+               segments (None: each segment), mean over chunks; broadband also low-passed at each
+               K_LOWPASS_HZ (k_lp<cutoff>_broadband)
+  amplitude envelope -> DFA alpha, fE/I per channel with windows inside the continuous segments,
+                        pooled over segments (compute_dfa_segments, compute_fei_segments)
   Welch PSD averaged over epochs -> aperiodic exponent per channel (broadband only)
 Every subject is cached in <out>/subjects/<file>.pkl and not recomputed with the same parameters;
 run(..., n_jobs=k) analyses the missing subjects in k parallel processes.
@@ -42,7 +48,10 @@ if str(ROOT) not in sys.path:
 from edge_of_chaos import config_chaos as default_cfg
 from edge_of_chaos import chaos_indexes as ci
 from edge_of_chaos.io_chaos import (discover_files, load_subject, check_output_dir, save_results,
-                                    load_cached_subject, save_tables_excel, load_results)
+                                    load_cached_subject, save_tables_excel, load_results, source_signature)
+from descriptive_analysis.segments import (apply_on_runs, runs_of_single_epochs, run_signals, equal_subsets,
+                                           mean_over_subsets)
+from synchrony_criticality.phase import bandpass_filter, analytic_signal
 
 warnings.filterwarnings("ignore")
 
@@ -50,13 +59,18 @@ SHEET_ORDER = ["subject_metrics", "group_tests", "group_summary", "channel_tests
                "channel_metrics", "epoch_metrics", "mse_scale_tests", "parameters"]
 
 
-def _long_signal(x, concatenate):
-    """(n_epochs, n_channels, n_times) -> list of (n_channels, n) signals: one, or one per epoch."""
-    return [ci.concat_epochs(x)] if concatenate else list(x)
+def _chunks(segments, sfreq, chunk_s):
+    """Non-overlapping chunks of chunk_s s inside every (n_channels, n) segment (None: the segments)."""
+    if not chunk_s:
+        return list(segments)
+    L = int(round(chunk_s * sfreq))
+    return [seg[:, k * L:(k + 1) * L] for seg in segments for k in range(seg.shape[-1] // L)]
 
 
-def _mean_over(signals, f):
-    """f applied to every long signal (n_channels, n) channel by channel, mean over signals."""
+def _mean_over(signals, f, n_ch):
+    """f applied to every (n_channels, n) signal channel by channel, mean over signals (NaN if none)."""
+    if not signals:
+        return np.full(n_ch, np.nan)
     vals = np.array([[f(s[c]) for c in range(s.shape[0])] for s in signals], float)
     return np.nanmean(vals, axis=0)
 
@@ -67,7 +81,7 @@ LAMBDA_PARAMS = {"LAMBDA_N_UNITS", "LAMBDA_SIGNALS", "LAMBDA_WINDOW_S", "LAMBDA_
                  "LAMBDA_DEMEAN_EPOCHS"}
 
 
-def lambda_band(x, env, sf, bname, cfg):
+def lambda_band(x, env, sf, bname, cfg, subsets=None):
     """
     Covariance width and lambda_max of one signal band for every cfg.LAMBDA_SIGNALS:
     x = band-passed signal, env = its amplitude envelope, both (n_epochs, n_channels, n_times).
@@ -76,32 +90,68 @@ def lambda_band(x, env, sf, bname, cfg):
     for the old edgeofpy estimate if "edgeofpy" is listed.
     """
     glob, detail = {}, {}
+    subsets = subsets or [np.arange(len(x))]
     for sig in cfg.LAMBDA_SIGNALS:
         if sig == "edgeofpy":
             cw = ci.compute_covariance_width(x)
             glob[f"cov_width_{bname}"] = cw["width"]
             glob[f"lambda_max_{bname}"] = ci.compute_lyapunov_exponent(x, cfg.LAMBDA_N_UNITS, cw["width"])["lambda_max"]
             continue
-        r = ci.compute_covariance_width_dahmen(env if sig == "envelope" else x, sf, sig, cfg.LAMBDA_WINDOW_S,
-                                               cfg.LAMBDA_EVENT_SD, cfg.LAMBDA_N_UNITS, cfg.LAMBDA_DEMEAN_EPOCHS)
+        src = env if sig == "envelope" else x
         t = LAMBDA_TAG[sig]
-        glob.update({f"cov_width_{t}_{bname}": r["width"], f"lambda_max_{t}_{bname}": r["lambda_max"],
-                     f"cov_mean_diag_{t}_{bname}": r["mean_diag"], f"cov_sd_offdiag_{t}_{bname}": r["sd_offdiag"],
-                     f"cov_mean_offdiag_{t}_{bname}": r["mean_offdiag"]})
-        if sig == "events":
-            glob[f"event_rate_{t}_{bname}"] = r["event_rate"]
-        detail[f"cov_{t}_{bname}"] = r["cov"].astype(np.float32)
+
+        def one(idx):
+            r = ci.compute_covariance_width_dahmen(src[idx], sf, sig, cfg.LAMBDA_WINDOW_S, cfg.LAMBDA_EVENT_SD,
+                                                   cfg.LAMBDA_N_UNITS, cfg.LAMBDA_DEMEAN_EPOCHS)
+            return {f"cov_width_{t}_{bname}": r["width"], f"lambda_max_{t}_{bname}": r["lambda_max"],
+                    f"cov_mean_diag_{t}_{bname}": r["mean_diag"], f"cov_sd_offdiag_{t}_{bname}": r["sd_offdiag"],
+                    f"cov_mean_offdiag_{t}_{bname}": r["mean_offdiag"], f"event_rate_{t}_{bname}": r["event_rate"],
+                    "cov": r["cov"]}
+        r = mean_over_subsets(subsets, one)
+        detail[f"cov_{t}_{bname}"] = r.pop("cov").astype(np.float32)
+        if sig != "events":
+            r.pop(f"event_rate_{t}_{bname}")
+        glob.update({k: float(v) for k, v in r.items()})
     return glob, detail
+
+
+def band_signals(sub, band, cfg, envelope=False, lowpass=None):
+    """
+    Band-passed signal (or its amplitude envelope; or band-passed then low-passed at lowpass Hz),
+    filtered on every run of contiguous epochs and cut back into the epochs, EDGE_TRIM_S s trimmed
+    at both ends of every epoch. Returns (n_epochs, n_channels, n_times').
+    """
+    data, sf, o = sub["data"], sub["sfreq"], cfg.FILTER_ORDER
+    runs = sub.get("runs") or runs_of_single_epochs(len(data))
+
+    def f(v):
+        y = bandpass_filter(v, sf, band, o)
+        if lowpass:
+            y = ci.lowpass_filter(y, sf, lowpass, o)
+        return np.abs(analytic_signal(y)) if envelope else y
+    x = apply_on_runs(data, runs, f, sf, cfg.PAD_S)
+    return ci.trim_edges(x, sf, cfg.EDGE_TRIM_S) if cfg.EDGE_TRIM_S else x
+
+
+def segments_of(x, sub, cfg):
+    """Continuous (n_channels, n) segments: the runs if nothing was trimmed, otherwise every epoch."""
+    runs = sub.get("runs") if not cfg.EDGE_TRIM_S else None
+    return run_signals(x, runs or runs_of_single_epochs(len(x)))
+
+
+def subsets_of(sub, cfg):
+    """Subsets of sub["n_equal"] epochs for the indices that depend on the amount of data."""
+    return equal_subsets(len(sub["data"]), sub.get("n_equal"), cfg.EQUAL_DRAWS, cfg.EQUAL_MODE, cfg.EQUAL_SEED)
 
 
 def analyze_lambda(sub, cfg):
     """Only the covariance-width / lambda_max measures of one subject (to update a cached subject)."""
-    data, sf = sub["data"], sub["sfreq"]
+    sf = sub["sfreq"]
     glob, detail = {}, {}
     for bname, band in signal_bands(cfg).items():
-        x = ci.broadband(data, sf, band, cfg.FILTER_ORDER, cfg.EDGE_TRIM_S)
-        env = ci.band_envelope(data, sf, band, cfg.FILTER_ORDER, cfg.EDGE_TRIM_S)
-        g, d = lambda_band(x, env, sf, bname, cfg)
+        x = band_signals(sub, band, cfg)
+        env = band_signals(sub, band, cfg, envelope=True)
+        g, d = lambda_band(x, env, sf, bname, cfg, subsets_of(sub, cfg))
         glob.update(g)
         detail.update(d)
     return glob, detail
@@ -122,7 +172,7 @@ def analyze_subject(sub, cfg, group, sid):
     data, sf, ch = sub["data"], sub["sfreq"], sub["ch_names"]
     n_ep, n_ch, n_t = data.shape
     want = set(cfg.MEASURES)
-    o, tr = cfg.FILTER_ORDER, cfg.EDGE_TRIM_S
+    subsets = subsets_of(sub, cfg)
     chan = {c: dict(group=group, subject=sid, channel=c) for c in ch}
     glob, detail, timing, ep_cols = {}, {}, {}, {}
 
@@ -141,7 +191,7 @@ def analyze_subject(sub, cfg, group, sid):
                                              downsample=cfg.K_DOWNSAMPLE, impl=cfg.K_IMPL, seed=cfg.SEED)
 
     for bname, band in signal_bands(cfg).items():
-        x = ci.broadband(data, sf, band, o, tr)            # band-passed, edge-trimmed signal
+        x = band_signals(sub, band, cfg)                    # band-passed on the continuous runs
 
         # ---- per epoch and channel
         for name, col, f in per_epoch:
@@ -169,43 +219,46 @@ def analyze_subject(sub, cfg, group, sid):
         # ---- 0-1 chaos test on the band signal (+ the low-passed variants for broadband)
         if "01_chaos_test" in want:
             t0 = time.time()
-            put(f"k_{bname}", _mean_over(_long_signal(x, cfg.CONCATENATE_EPOCHS), k01))
+            put(f"k_{bname}", _mean_over(_chunks(segments_of(x, sub, cfg), sf, cfg.K_CHUNK_S), k01, n_ch))
             if bname == "broadband":
                 for fc in cfg.K_LOWPASS_HZ:
-                    lp = ci.trim_edges(ci.lowpass_filter(ci.bandpass_filter(data, sf, band, o), sf, fc, o), sf, tr)
-                    put(f"k_lp{fc:g}_broadband", _mean_over(_long_signal(lp, cfg.CONCATENATE_EPOCHS), k01))
+                    lp = band_signals(sub, band, cfg, lowpass=fc)
+                    put(f"k_lp{fc:g}_broadband", _mean_over(_chunks(segments_of(lp, sub, cfg), sf, cfg.K_CHUNK_S),
+                                                            k01, n_ch))
             tick("01_test", t0)
 
         # ---- DFA and fE/I on the amplitude envelope of the signal
         if {"dfa", "fei_ratio"} & want:
             t0 = time.time()
-            env = _long_signal(ci.band_envelope(data, sf, band, o, tr), cfg.CONCATENATE_EPOCHS)
-            dfa = [[ci.compute_dfa(s[c], sf, cfg.DFA_FIT_S, cfg.DFA_N_SCALES, cfg.DFA_OVERLAP)
-                    for c in range(n_ch)] for s in env]
-            alpha = np.array([[d["alpha"] for d in row] for row in dfa])          # (n_signals, n_ch)
+            env_segs = segments_of(band_signals(sub, band, cfg, envelope=True), sub, cfg)
+            dfa = [ci.compute_dfa_segments([sg[c] for sg in env_segs], sf, cfg.DFA_FIT_S, cfg.DFA_N_SCALES,
+                                           cfg.DFA_OVERLAP) for c in range(n_ch)]
+            alpha = np.array([d["alpha"] for d in dfa])                            # (n_ch,)
             if "dfa" in want:
-                put(f"dfa_{bname}", np.nanmean(alpha, 0))
-                detail[f"dfa_{bname}"] = dict(windows_s=dfa[0][0]["windows"] / sf,
-                                              fluct=np.array([d["fluctuations"] for d in dfa[0]]))
+                put(f"dfa_{bname}", alpha)
+                detail[f"dfa_{bname}"] = dict(windows_s=dfa[0]["windows"] / sf,
+                                              fluct=np.array([d["fluctuations"] for d in dfa]))
             if "fei_ratio" in want:
-                fei = np.array([[ci.compute_fei_ratio(s[c], sf, cfg.FEI_WINDOW_S, cfg.FEI_OVERLAP,
-                                                      alpha[i, c], cfg.FEI_DFA_THRESHOLD)["fei"]
-                                 for c in range(n_ch)] for i, s in enumerate(env)])
-                put(f"fei_{bname}", np.nanmean(fei, 0))
+                fei = np.array([ci.compute_fei_segments([sg[c] for sg in env_segs], sf, cfg.FEI_WINDOW_S,
+                                                        cfg.FEI_OVERLAP, alpha[c], cfg.FEI_DFA_THRESHOLD)["fei"]
+                                for c in range(n_ch)])
+                put(f"fei_{bname}", fei)
             tick("dfa_fei", t0)
 
         # ---- whole montage
         if {"covariance_width", "lyapunov_exponent"} & want:
             t0 = time.time()
-            g, d = lambda_band(x, ci.band_envelope(data, sf, band, o, tr), sf, bname, cfg)
+            g, d = lambda_band(x, band_signals(sub, band, cfg, envelope=True), sf, bname, cfg, subsets)
             glob.update(g)
             detail.update(d)
             tick("cov_lambda", t0)
         if "entropy_production" in want:
             t0 = time.time()
-            epr = ci.compute_entropy_production(x, sf, cfg.EP_N_STATES, cfg.EP_LAG_S, cfg.EP_PSEUDOCOUNT, cfg.SEED)
-            glob[f"entropy_production_{bname}"] = epr["ep"]
-            glob[f"entropy_production_per_s_{bname}"] = epr["ep_per_s"]
+            states = ci._states(x, cfg.EP_N_STATES, cfg.SEED)              # fitted on all epochs
+            epr = mean_over_subsets(subsets, lambda idx: ci.entropy_production_from_states(
+                states[idx], sf, cfg.EP_N_STATES, cfg.EP_LAG_S, cfg.EP_PSEUDOCOUNT))
+            glob[f"entropy_production_{bname}"] = float(epr["ep"])
+            glob[f"entropy_production_per_s_{bname}"] = float(epr["ep_per_s"])
             detail[f"ep_P_{bname}"] = epr["P"]
             tick("entropy_production", t0)
 
@@ -222,7 +275,8 @@ def analyze_subject(sub, cfg, group, sid):
 
     chan_rows = list(chan.values())
     num = pd.DataFrame(chan_rows).drop(columns=["group", "subject", "channel"])
-    row = dict(group=group, subject=sid, n_channels=n_ch, n_epochs=n_ep, duration_s=n_ep * n_t / sf,
+    row = dict(group=group, subject=sid, n_channels=n_ch, n_epochs=n_ep, n_epochs_equal=len(subsets[0]),
+               n_runs=len(sub.get("runs") or []) or n_ep, duration_s=n_ep * n_t / sf,
                sfreq=sf, **num.mean(numeric_only=True).to_dict(), **glob)
     epochs = [dict(group=group, subject=sid, epoch=e, label=sub["labels"][e],
                    **{k: float(v[e]) for k, v in ep_cols.items()}) for e in range(n_ep)]
@@ -253,12 +307,13 @@ def _analyze_file(job):
     loads, analyses and caches one file. job = (path, group, cache, params, cfg_state, load_kw,
     patch); patch = only the lambda settings changed: just those measures are recomputed into the cache.
     """
-    path, group, cache, params, state, load_kw, patch = job
+    path, group, cache, params, state, load_kw, patch, n_equal = job
     from edge_of_chaos import config_chaos as cfg
     for k, v in state.items():
         setattr(cfg, k, v)
     t0 = time.time()
     sub = load_subject(path, sfreq=cfg.SFREQ, max_epochs=cfg.MAX_EPOCHS, **load_kw)
+    sub["n_equal"] = n_equal
     if patch:                       # cached with other lambda settings only: redo just those
         res = load_results(cache)
         glob, detail = analyze_lambda(sub, cfg)
@@ -270,6 +325,7 @@ def _analyze_file(job):
     else:
         res = analyze_subject(sub, cfg, group, Path(path).stem)
     res["params"] = params
+    res["source"] = source_signature(path)
     save_results(res, cache)
     print(f"  {Path(path).stem} done in {time.time() - t0:.0f} s", flush=True)
     return str(cache)
@@ -293,21 +349,31 @@ def run(groups, out_dir, cfg=default_cfg, colors=None, pattern="*.set", fixed_le
 
     jobs, caches = [], []
     load_kw = dict(fixed_length_s=fixed_length_s, window=window, channels=channels)
+    files = {g: discover_files(folder, pattern) for g, folder in groups.items()}
+    if file_filter is not None:
+        files = {g: file_filter(g, f) for g, f in files.items()}
+    # indices that depend on the amount of data: the same number of epochs in every subject
+    from edge_of_chaos.io_chaos import count_epochs
+    n_equal = (min(count_epochs(f) for fs in files.values() for f in fs)
+               if cfg.EQUAL_EPOCHS and fixed_length_s is None else None)
+    params["n_equal"] = n_equal
+    print(f"covariance width / lambda_max, entropy production on {n_equal or 'all'} epochs per subject")
     for group, folder in groups.items():
-        files = discover_files(folder, pattern)
-        if file_filter is not None:
-            files = file_filter(group, files)
-        print(f"\n== {group}: {len(files)} files in {folder}")
-        for f in files:
+        print(f"\n== {group}: {len(files[group])} files in {folder}")
+        for f in files[group]:
             cache = out / "subjects" / f"{f.stem}.pkl"
             caches.append(cache)
-            if not cfg.OVERWRITE and load_cached_subject(cache, params) is not None:
+            cached = None if cfg.OVERWRITE else load_cached_subject(cache, params)
+            if cached is not None and cached.get("source") != source_signature(f):
+                cached = None
+            if cached is not None:
                 print(f"  {f.stem} (cache)")
             else:
-                patch = not cfg.OVERWRITE and _only_lambda_changed(cache, params)
+                patch = (not cfg.OVERWRITE and _only_lambda_changed(cache, params)
+                         and load_results(cache).get("source") == source_signature(f))
                 if patch:
                     print(f"  {f.stem} (cache, lambda measures to update)")
-                jobs.append((str(f), group, cache, params, _cfg_state(cfg), load_kw, patch))
+                jobs.append((str(f), group, cache, params, _cfg_state(cfg), load_kw, patch, n_equal))
     print(f"\n{len(jobs)} subjects to analyse, {n_jobs} parallel process(es)", flush=True)
     if n_jobs > 1 and len(jobs) > 1:
         import os

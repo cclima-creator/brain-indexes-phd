@@ -6,16 +6,11 @@ Grafici delle valanghe, database IPS: legge avalanche_results.pkl prodotto da MA
 
   figA1_threshold_divergence      z-score per banda vs gaussiana di fit, punto di divergenza e soglia usata
   figA2_ccdf_sizes_durations      CCDF di dimensioni e durate, ogni soggetto, per banda
-  figA3_powerlaw_fits_<banda>     PDF di S e T per soggetto con fit principale, range power law e cutoff
-  figA4_size_duration_scaling     <S>(T) per soggetto con pendenza 1/(sigma nu z) e pendenza prevista
-  figA5_exponents_dcc             tau, alpha, 1/(sigma nu z), DCC per banda e gruppo
-  figA5_rigorous_exponents        come A5, solo esponenti del range power law con > 50% dei dati
-  figA6_powerlaw_quality          p-value, decadi del range, MSE, cutoff per banda e gruppo
+  (figA3-A6 e figA15, power law / esponenti / DCC: in power_law_goodness/, analisi messa da parte)
   figA7_branching_ratio_bins      sigma per durata del time bin (4-18 ms), media ± SEM per gruppo
   figA8_repertoire                repertorio (pattern unici/s e per valanga) e diversita' dei pattern
   figA9_fano                      Fano factor e curva FF(W)
   (figA11_iei e figA12-A14 dell'IEI: disattivate)
-  figA15_distribution_table       % di valanghe nel range power law, plausibilita' e miglior modello
   figA10_summary_heatmap          mediane per gruppo e differenza (effect size) metrica x banda
 
 IEI robusto (da iei_results.pkl, se c'e'; solo diagnostica, non usato per le valanghe):
@@ -40,7 +35,6 @@ from photosensitive import config_ips_avalan as cfg
 from photosensitive.report import FALLBACK_DIR, load_results
 from descriptive_analysis import plots
 from descriptive_analysis.plots import _save as _save_fig, _label, _grid, _box_by_group, _stars
-from avalanche_criticality.power_law import model_cdf
 
 
 # ------------------------------------------------------------------ UTILITA'
@@ -50,29 +44,6 @@ def _save(fig, path):
         ax.xaxis.set_minor_formatter(NullFormatter())
         ax.yaxis.set_minor_formatter(NullFormatter())
     _save_fig(fig, path)
-
-
-def _logbin_pdf(x, n_bins=20):
-    """PDF di dati interi con bin logaritmici: (centri, densita' per unita' di x)."""
-    x = np.asarray(x, dtype=float)
-    x = x[x > 0]
-    if x.size == 0:
-        return np.array([]), np.array([])
-    edges = np.unique(np.floor(np.geomspace(x.min(), x.max() + 1, n_bins + 1)))
-    if edges.size < 2:
-        edges = np.array([x.min(), x.min() + 1])
-    counts, _ = np.histogram(x, bins=edges)
-    dens = counts / (x.size * np.diff(edges))
-    centers = np.sqrt(edges[:-1] * (edges[1:] - 1).clip(min=edges[:-1]))
-    ok = counts > 0
-    return centers[ok], dens[ok]
-
-
-def _model_pdf(xs, a, xmin, xmax, frac):
-    """PDF discreta della power law su [xmin, xmax], scalata alla frazione di dati nel range."""
-    xs = np.asarray(xs, dtype=float)
-    p = model_cdf(xs, a, xmin, xmax, True) - model_cdf(xs - 1, a, xmin, xmax, True)
-    return frac * p
 
 
 def _ccdf(x):
@@ -169,68 +140,6 @@ def plot_ccdf(details, bands, colors, out_png):
     _save(fig, out_png)
 
 
-def _fit_panel(ax, x, f, color, xlabel, sym):
-    """Un pannello: PDF a bin log, fit principale (x >= xmin), range power law e cutoff."""
-    c, d = _logbin_pdf(x)
-    ax.loglog(c, d, "o", color=color, ms=4, mfc="none")
-    if not np.isfinite(f.get("alpha", np.nan)):
-        return
-    xs = np.unique(np.round(np.geomspace(f["xmin"], max(x), 50)))
-    ax.loglog(xs, _model_pdf(xs, f["alpha"], f["xmin"], None, f["frac_tail"]), "k-", lw=1.2)
-    txt = f"{sym} = {f['alpha']:.2f}, p = {f['p_gof']:.2f}"
-    if np.isfinite(f.get("xmax_cutoff", np.nan)):
-        lo, hi = f["range_xmin"], f["xmax_cutoff"]
-        xr = np.unique(np.round(np.geomspace(lo, hi, 30)))
-        ax.loglog(xr, _model_pdf(xr, f["alpha_range"], lo, hi, f["n_range"] / len(x)), color="tab:orange",
-                  lw=2)
-        ax.axvspan(lo, hi, color="tab:orange", alpha=0.08)
-        ax.axvline(hi, color="tab:orange", ls="--", lw=1)
-        txt += f"\nrange {lo:g}-{hi:g}: {sym} = {f['alpha_range']:.2f}"
-    else:
-        txt += "\nno power-law range"
-    ax.text(0.03, 0.03, txt, transform=ax.transAxes, fontsize=plots.BASE_FONT - 5, va="bottom")
-    ax.set_xlabel(xlabel)
-
-
-def plot_powerlaw_fits(details, band, colors, out_png):
-    """figA3: per ogni soggetto, PDF di S e di T con i fit (nero = fit principale, arancio = range)."""
-    items = [(k, v) for k, v in details.items() if k[2] == band and k[0] in colors]
-    if not items:
-        return
-    fig, axes = _grid(2 * len(items), ncols=6, h=3.0, w=3.4)
-    for i, ((g, sid, _), det) in enumerate(items):
-        for k, (var, fit, lab, sym) in enumerate((("sizes", "size_fit", "S", "τ"),
-                                                   ("durations", "duration_fit", "T", "α"))):
-            ax = axes[2 * i + k]
-            if len(det[var]):
-                _fit_panel(ax, det[var], det[fit], colors[g], lab, sym)
-            ax.set_title(f"{sid[:14]} ({_label(g)[:9]})", fontsize=plots.BASE_FONT - 5,
-                         color=colors[g])
-    fig.suptitle(f"{band}: power-law fits (black: x ≥ xmin, orange: range where the power law holds)")
-    _save(fig, out_png)
-
-
-def plot_scaling(details, metrics, bands, colors, out_png):
-    """figA4: <S>(T) per soggetto, log-log, con pendenza mediana fittata e prevista dal DCC."""
-    fig, axes = plt.subplots(1, len(bands), figsize=(3.4 * len(bands), 3.8), squeeze=False)
-    for j, b in enumerate(bands):
-        ax = axes[0, j]
-        for (g, sid, bb), det in details.items():
-            if bb == b and g in colors and len(det["third_fit"]["T"]):
-                ax.loglog(det["third_fit"]["T"], det["third_fit"]["mean_S"], "-", color=colors[g],
-                          lw=0.8, alpha=0.6)
-        lines = []
-        for g in _groups(metrics):
-            d = metrics[(metrics.band == b) & (metrics.group == g)]
-            lines.append(f"{_label(g)[:10]}: fit {d.third.median():.2f}, pred {d.predicted_third.median():.2f}")
-        ax.text(0.03, 0.97, "\n".join(lines), transform=ax.transAxes, va="top",
-                fontsize=plots.BASE_FONT - 5)
-        ax.set(title=b, xlabel="Duration T (bins)")
-    axes[0, 0].set_ylabel("<S>(T)")
-    fig.suptitle("Size-duration scaling: <S>(T) ~ T^(1/σνz) (median slope fitted vs predicted (α-1)/(τ-1))")
-    _save(fig, out_png)
-
-
 def plot_branching_bins(br, bands, colors, out_png, br_tests=None):
     """
     figA7: sigma (stimatore 'bins' sopra, 'geometric' sotto) per durata del time bin, media ± SEM.
@@ -286,9 +195,10 @@ def plot_fano(details, metrics, bands, colors, out_png):
 
 def plot_summary_heatmap(metrics, bands, colors, out_png):
     """figA10: mediane per gruppo (z-score per riga) e differenza tra gruppi (r rank-biserial)."""
-    cols = [("dcc", "DCC"), ("tau", "τ"), ("alpha", "α"), ("third", "1/σνz"), ("sigma_bins", "σ"),
+    cols = [("avalanche_rate_hz", "rate (1/s)"), ("mean_size", "mean size"), ("sigma_bins", "σ"),
             ("sigma_geometric", "σ geometric"), ("repertoire_rate", "repertoire /s"),
-            ("diversity_mean", "pattern diversity"), ("ff", "Fano factor"), ("size_decades", "size decades")]
+            ("repertoire_per_avalanche", "repertoire / avalanche"), ("diversity_mean", "pattern diversity"),
+            ("ff", "Fano factor")]
     cols = [(c, l) for c, l in cols if c in metrics]
     groups = _groups(metrics)
     if len(groups) != 2:
@@ -449,67 +359,6 @@ def plot_iei(out):
                 "Robust inter-event interval per group and band (Mann-Whitney U)")
 
 
-# ------------------------------------------------------------------ TABELLA DELLE DISTRIBUZIONI
-MODEL_SHORT = {"power_law": "PL", "truncated_power_law": "TPL", "lognormal": "LN",
-               "exponential": "Exp", "stretched_exponential": "SExp"}
-
-
-def plot_distribution_table(summ, bands, colors, out_png, title_extra="",
-                            variables=(("size", "Avalanche size S"), ("duration", "Avalanche duration T")),
-                            what="avalanches", heading=None):
-    """
-    figA15: una tabella per variabile (default: dimensioni S e durate T). Righe = banda x gruppo.
-    Colonne: % di dati nel range power law (mediana [IQR], tratto arancio della fig. A3),
-    decadi del range, soggetti con power law plausibile (Clauset p >= 0.1), quante volte ogni
-    modello e' il migliore (confronti di Vuong), quanti con confidenza forte e quanti ambigui.
-    variables: (colonna 'variable' di summ, titolo della tabella); what: cosa conta la % (prima colonna).
-    """
-    from matplotlib.colors import to_rgba
-    cols = ([f"% {what}\nin PL range\nmedian [IQR]", "decades\n(median)", "PL plausible\n(p ≥ 0.1)"]
-            + [f"best:\n{MODEL_SHORT[m]}" for m in MODEL_SHORT] + ["strong\nconfidence", "ambiguous"])
-    fig, axes = plt.subplots(len(variables), 1, figsize=(17, 1.1 + 0.42 * 2 * len(bands) * len(variables)),
-                             squeeze=False)
-    axes = axes[:, 0]
-    for ax, (var, title) in zip(axes, variables):
-        ax.axis("off")
-        cells, labels, row_colors = [], [], []
-        for b in bands:
-            for g in colors:
-                d = summ[(summ.band == b) & (summ.group == g) & (summ.variable == var)]
-                if d.empty:
-                    continue
-                r = d.iloc[0]
-                n = int(r.n_subjects)
-                cells.append([f"{r.pct_in_pl_range_median:.0f}% [{r.pct_in_pl_range_q25:.0f}-{r.pct_in_pl_range_q75:.0f}]",
-                              "–" if not np.isfinite(r.decades_median) else f"{r.decades_median:.2f}",
-                              f"{int(r.n_pl_plausible)}/{n}"]
-                             + [f"{int(r[f'n_best_{m}'])}/{n}" for m in MODEL_SHORT]
-                             + [f"{int(r.n_strong)}/{n}", f"{int(r.n_ambiguous)}/{n}"])
-                labels.append(f"{b} · {_label(g)}")
-                row_colors.append(to_rgba(colors[g], 0.12))
-        tb = ax.table(cellText=cells, rowLabels=labels, colLabels=cols, loc="center", cellLoc="center")
-        tb.auto_set_font_size(False)
-        tb.set_fontsize(10)
-        tb.scale(1, 1.55)
-        for (i, j), c in tb.get_celld().items():
-            if i == 0:
-                c.set_height(c.get_height() * 2.2)
-                c.set_text_props(weight="bold")
-            elif i > 0:
-                c.set_facecolor(row_colors[i - 1])
-                if j >= 3 and j < 3 + len(MODEL_SHORT):           # evidenzia il modello piu' frequente
-                    vals = [int(x.split("/")[0]) for x in cells[i - 1][3:3 + len(MODEL_SHORT)]]
-                    if vals[j - 3] == max(vals) and max(vals) > 0:
-                        c.set_text_props(weight="bold")
-        ax.set_title(title, fontsize=plots.BASE_FONT + 1, loc="left", pad=4)
-    fig.suptitle((heading or "How the avalanche distributions are fitted: share in the power-law range and best model"
-                  + (f" — {title_extra}" if title_extra else "")) + "\n"
-                 "(PL power law, TPL truncated power law, LN lognormal, Exp exponential, SExp stretched exponential; "
-                 "Vuong / nested LR tests, p < 0.05"
-                 + ("; xmin = minimum of the data)" if heading is None else ")"), fontsize=plots.BASE_FONT)
-    _save(fig, out_png)
-
-
 # ------------------------------------------------------------------ MAIN
 def find_results(out_dir, name="avalanche_results.pkl"):
     for d in (out_dir, FALLBACK_DIR / cfg.OUT_SUBDIR):
@@ -542,41 +391,19 @@ def main():
     plot_threshold_divergence(res["divergence_curves"], res["divergence"], bands, colors,
                               out / "figA1_threshold_divergence.png")
     plot_ccdf(details, bands, colors, out / "figA2_ccdf_sizes_durations.png")
-    for b in bands:
-        plot_powerlaw_fits(details, b, colors, out / f"figA3_powerlaw_fits_{b}.png")
-    plot_scaling(details, metrics, bands, colors, out / "figA4_size_duration_scaling.png")
-    _band_boxes(metrics, [("tau", "τ (size)"), ("alpha", "α (duration)"), ("third", "1/σνz"),
-                          ("dcc", "DCC"), ("dcc_clauset", "DCC (Clauset xmin)")], bands, colors,
-                out / "figA5_exponents_dcc.png",
-                "Critical exponents and deviation from criticality coefficient (Maschke et al. 2024)")
-    rig = [(c, l) for c, l in (("tau_rigorous", "τ (size)\nPL range only"),
-                                ("alpha_rigorous", "α (duration)\nPL range only"),
-                                ("third_rigorous", "1/σνz\nPL range only"),
-                                ("dcc_rigorous", "DCC\nPL range only")) if c in metrics]
-    if rig:
-        _band_boxes(metrics, rig, bands, colors, out / "figA5_rigorous_exponents.png",
-                    "Critical exponents and DCC from the power-law range only (orange fits of fig. A3), "
-                    f"only where > {cfg.MIN_PCT_IN_RANGE:g}% of avalanches are in that range "
-                    "(n = subjects with a value: photosensitive · not photosensitive)", show_n=True)
-    _band_boxes(metrics, [("size_p_gof", "p power law (S)"), ("size_decades", "decades (S)"),
-                          ("size_xmax_cutoff", "cutoff S"), ("size_mse", "MSE log-log (S)"),
-                          ("duration_p_gof", "p power law (T)"), ("duration_mse", "MSE log-log (T)")],
-                bands, colors, out / "figA6_powerlaw_quality.png",
-                "How power-law are the distributions (Clauset p, range in decades, cutoff, MSE)")
     plot_branching_bins(br, bands, colors, out / "figA7_branching_ratio_bins.png", res.get("br_tests"))
     _band_boxes(metrics, [("repertoire_rate", "unique patterns / s"),
                           ("repertoire_per_avalanche", "unique / avalanches"),
                           ("diversity_mean", "pattern diversity\n(mean Hamming)")],
                 bands, colors, out / "figA8_repertoire.png",
-                "Avalanche repertoire (Sorrentino et al. 2021; Maschke et al. 2024)")
+                "Avalanche repertoire (Sorrentino et al. 2021; Maschke et al. 2024), on the same number "
+                "of epochs in every subject")
     plot_fano(details, metrics, bands, colors, out / "figA9_fano.png")
     # figA11 (IEI medio e mediano per gruppo e banda) disattivata: analisi dell'IEI non piu' usata
     # iei_cols = [(c, l) for c, l in (("mean_iei_ms", "mean IEI (ms)"), ("median_iei_ms", "median IEI (ms)"))
     #             if c in metrics]
     # _band_boxes(metrics, iei_cols, bands, colors, out / "figA11_iei.png",
     #             "Inter-event interval per group and band (Mann-Whitney U)")
-    if res.get("dist_summary") is not None and len(res["dist_summary"]):
-        plot_distribution_table(res["dist_summary"], bands, colors, out / "figA15_distribution_table.png")
     plot_summary_heatmap(metrics, bands, colors, out / "figA10_summary_heatmap.png")
     print("\nGrafici salvati in:", out)
 

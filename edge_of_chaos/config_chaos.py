@@ -10,12 +10,12 @@ columns are named <measure>_<band> (lzc_alpha, dfa_broadband, ...).
 Measure -> where it is computed (functions in chaos_indexes.py):
   per channel, per epoch (then mean over epochs), band-passed signal:
       LZC, Katz FD, Renyi H2, MSE
-  per channel, long signal (epochs concatenated if CONCATENATE_EPOCHS), see below:
-      0-1 chaos test K (band-passed signal; for broadband also low-passed at K_LOWPASS_HZ),
-      DFA alpha and fE/I (amplitude envelope of the signal)
+  per channel, continuous segments (runs of contiguous epochs; never joined across a gap):
+      0-1 chaos test K on chunks of K_CHUNK_S s (band-passed signal; broadband also low-passed
+      at K_LOWPASS_HZ), DFA alpha and fE/I with windows inside the segments (amplitude envelope)
   per channel, PSD averaged over epochs (whole spectrum, broadband only):
       aperiodic exponent beta (specparam, falls back to fooof)
-  whole montage (one value per subject and signal):
+  whole montage (one value per subject and signal), on the same number of epochs per subject:
       covariance width and lambda_max (Dahmen et al. 2019, edgeofpy), entropy production
 """
 
@@ -27,10 +27,16 @@ BANDS = dict(delta=(1.0, 4.0), theta=(4.0, 8.0), alpha=(8.0, 13.0), beta=(13.0, 
              gamma=(30.0, 45.0))
 SIGNAL_BANDS = ["broadband", "delta", "theta", "alpha", "beta", "gamma"]   # signals analysed
 FILTER_ORDER = 4              # Butterworth order (sos, forward-backward -> zero phase)
-EDGE_TRIM_S = 1.0             # seconds removed at both ends of every filtered epoch
-CONCATENATE_EPOCHS = True     # K, DFA, fE/I on the concatenation of the (trimmed) epochs.
-                              # Right for continuous recordings cut in fixed-length epochs;
-                              # for truly separate trials set False (computed per epoch, then mean)
+EDGE_TRIM_S = 1.0             # seconds removed at both ends of every epoch after filtering (separate
+                              # trials); 0 for continuous recordings (filtered on the runs, sub["runs"])
+PAD_S = 2.0                   # reflection padding (s) at both ends of every run before filtering
+# Covariance width / lambda_max and entropy production depend on the amount of data: computed on
+# the same number of epochs in every subject (EQUAL_EPOCHS: the minimum over the subjects of run();
+# a database MAIN can give sub["n_equal"] itself), mean over EQUAL_DRAWS subsets
+EQUAL_EPOCHS = True
+EQUAL_MODE = "random"         # "random" (separate trials) or "blocks" (consecutive epochs)
+EQUAL_DRAWS = 10
+EQUAL_SEED = 0
 MAX_EPOCHS = None             # None = all epochs; an int = only the first MAX_EPOCHS (quick runs)
 
 # measures to compute (names of the functions in chaos_indexes.py without "compute_")
@@ -43,9 +49,12 @@ K_LOWPASS_HZ = (4.0, 8.0, 13.0)   # low-pass cutoffs: one K per cutoff (column k
                                   # Toker 2022 apply the test to slow (low-passed) activity; the
                                   # best cutoff is a methodological choice of the study
 K_SIGMA = 0.5                 # noise added to the mean-square displacement
-K_N_C = 1000                  # random frequencies c in (pi/5, 3pi/5); K = median over them
+K_N_C = 1000                  # random frequencies c in (pi/5, 4pi/5); K = median over them
 K_DENOISE = False             # Schreiber (1993) denoising before the test (slow: O(N^2))
 K_DOWNSAMPLE = "minmax"       # keep only local minima/maxima (Toker 2022); None = no downsampling
+K_CHUNK_S = None              # K on chunks of this length (s) inside the continuous segments, mean over
+                              # chunks: the same length in every condition (K depends on the length).
+                              # None = on every continuous segment (separate trials: every epoch)
 K_IMPL = "fast"               # "fast" = vectorized (FFT) version in chaos_indexes.py,
                               # "edgeofpy" = edgeofpy.chaos.z1_chaos_test (same algorithm, slow)
 
@@ -88,8 +97,8 @@ SEED = 0
 
 # ---- DFA on the amplitude envelope (Linkenkaer-Hansen 2001; Hardstone 2012), every SIGNAL_BANDS
 # signal (classically alpha / beta; the broadband envelope is less standard)
-DFA_FIT_S = (1.0, 10.0)       # window range used for the fit (s); the upper limit is lowered to
-                              # 1/10 of the signal length if the signal is short
+DFA_FIT_S = (1.0, 10.0)       # window range used for the fit (s); windows only inside continuous
+                              # segments, a size is used only if >= 10 windows fit in the data
 DFA_N_SCALES = 20             # log-spaced windows in DFA_FIT_S
 DFA_OVERLAP = True            # 50 % overlapping windows
 
@@ -107,7 +116,8 @@ OVERWRITE = False
 
 def params():
     """Parameters that change the results: if different from the cached ones, the subject is redone."""
-    names = ["SFREQ", "BROADBAND", "BANDS", "SIGNAL_BANDS", "FILTER_ORDER", "EDGE_TRIM_S", "CONCATENATE_EPOCHS",
+    names = ["SFREQ", "BROADBAND", "BANDS", "SIGNAL_BANDS", "FILTER_ORDER", "EDGE_TRIM_S", "PAD_S",
+             "EQUAL_EPOCHS", "EQUAL_MODE", "EQUAL_DRAWS", "EQUAL_SEED", "K_CHUNK_S",
              "MAX_EPOCHS", "MEASURES", "K_LOWPASS_HZ", "K_SIGMA", "K_N_C", "K_DENOISE",
              "K_DOWNSAMPLE", "K_IMPL", "LAMBDA_N_UNITS", "LAMBDA_SIGNALS", "LAMBDA_WINDOW_S",
              "LAMBDA_EVENT_SD", "LAMBDA_DEMEAN_EPOCHS", "LZC_SYMBOLIZE", "PSD_SEGMENT_S",

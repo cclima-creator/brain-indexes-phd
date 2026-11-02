@@ -39,7 +39,7 @@ from photosensitive.MAIN_IPS_AVALAN import band_filter
 from photosensitive.plot_ips_avalan import plot_distribution_table
 from descriptive_analysis import plots
 from avalanche_criticality.binarization import zscore_channels
-from avalanche_criticality.power_law import fit_power_law, compare_all_distributions, MODELS
+from power_law_goodness.power_law import fit_power_law, compare_all_distributions, MODELS
 
 warnings.filterwarnings("ignore")
 

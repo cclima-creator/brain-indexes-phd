@@ -121,3 +121,18 @@ SHEET_ORDER = ["group_summary_bands", "group_tests", "subject_level_metrics", "p
                "epoch_counts_group", "epoch_counts", "ks_permutation_tests", "channel_tests",
                "snr_by_stim_freq_group", "epoch_table_snr", "band_power_per_subject",
                "band_power_per_channel", "signal_per_channel", "signal_per_epoch_channel"]
+# ---- continuous signal and equal amount of data (descriptive_analysis/segments.py)
+# Every IPS epoch is a separate trial (one photic stimulation frequency, -1..11 s): filters and
+# Hilbert transforms run on each epoch padded by PAD_S s of reflection on both sides.
+PAD_S = 2.0
+# Indices that depend on the amount of data are computed on N_EQUAL epochs per subject (minimum
+# over all subjects), as the mean over EQUAL_DRAWS random subsets.
+EQUAL_MODE = "random"
+EQUAL_DRAWS = 10
+EQUAL_SEED = 0
+
+
+def all_subject_files(groups=None):
+    """Every analysed .set file of every group (excluded subjects removed)."""
+    from photosensitive.io_eeg import discover_files
+    return [f for g, folder in (groups or GROUPS).items() for f in subject_files(g, discover_files(folder))]

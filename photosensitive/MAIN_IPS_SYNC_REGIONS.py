@@ -5,16 +5,17 @@ to see WHERE on the scalp the group differences are located (functional connecti
 
 Indices
   global synchrony (GS) and metastability (M)    regional Kuramoto (synchrony_criticality/regional.py),
-                                                 recomputed from the phases of the .set files
+                                                 recomputed from the phases of the .set files (filter and
+                                                 Hilbert as MAIN_IPS_SYNC.band_signal, new method)
   PLV, PPC, mean phase coherence (PC), PLI,      regional means of the subject matrices saved by
-  wPLI, debiased wPLI, imaginary coherence       MAIN_IPS_SYNC.py in syncron_results/subjects/
+  wPLI, debiased wPLI, imaginary coherence       MAIN_IPS_SYNC.py in syncron_results/new_method/subjects/
 Regions: config_ips_sync.REGIONS. "within r" = pairs inside region r; "a-b" = pairs between a and b.
 
 Statistics: Mann-Whitney per band, index and region cell (6 within + 15 between = 21 cells);
 p_fdr = Benjamini-Hochberg over the 21 cells of that band and index (question: where, for this
 index in this band?). Effect size: rank-biserial r (> 0: photosensitive higher).
 
-Outputs in syncron_results/regions/ (occipital ROI: not meaningful, all channels are needed):
+Outputs in syncron_results/new_method/regions/ (occipital ROI: not meaningful, all channels are needed):
   regional_synchrony.xlsx        subject x band x index x cell values, tests, group medians
   fig_regions_<index>.png        rows = bands; group-mean region matrices and effect-size matrix
                                  (diagonal = within-region, off-diagonal = between-region)
@@ -41,7 +42,8 @@ from photosensitive.report import load_results, save_tables_excel, check_output_
 from descriptive_analysis import plots
 from descriptive_analysis.plots import _save, _label
 from descriptive_analysis.summary_stats import fdr_bh
-from synchrony_criticality.phase import band_analytic, drop_flat_channels
+from synchrony_criticality.phase import drop_flat_channels
+from photosensitive.MAIN_IPS_SYNC import band_signal
 from synchrony_criticality.regional import region_indices, region_pairs, within_between, regional_kuramoto
 
 warnings.filterwarnings("ignore")
@@ -68,7 +70,7 @@ def regional_kuramoto_subject(fpath, ch_names, bands):
     idx = region_indices(names, cfg.REGIONS)
     out = {}
     for b, band in bands.items():
-        phases = np.angle(band_analytic(data, ep.info["sfreq"], band, cfg.FILTER_ORDER, cfg.EDGE_TRIM_S))
+        phases = np.angle(band_signal(data, ep.info["sfreq"], band, None, base.PAD_S, cfg.EDGE_TRIM_S))
         out[b] = regional_kuramoto(phases, idx)
     return out
 
@@ -204,10 +206,10 @@ def plot_overview(tests, regions, out_png):
 
 # ================================================================== MAIN
 def main():
-    out_sync = cfg.results_dir("all", base.OUT_DIR)
+    out_sync = cfg.results_dir("all", base.OUT_DIR) / cfg.NEW_METHOD_SUBDIR
     cache_dir = out_sync / "subjects"
     if not cache_dir.exists():
-        raise SystemExit("syncron_results/subjects not found: run MAIN_IPS_SYNC.py (all channels) first")
+        raise SystemExit("syncron_results/new_method/subjects not found: run MAIN_IPS_SYNC.py (all channels) first")
     out = check_output_dir(out_sync / "regions", ["regional_synchrony.xlsx"])
     print("Output folder:", out)
     rows = []

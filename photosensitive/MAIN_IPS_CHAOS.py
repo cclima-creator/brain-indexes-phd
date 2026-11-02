@@ -27,10 +27,19 @@ OUT_ROOT = Path(r"C:\Users\Chiara Clima\Desktop\eeg preprocess photosensitive\ed
 # ---- overrides of config_chaos for the IPS database
 cfg.BANDS = dict(base.BANDS)          # same bands as the other IPS analyses
 cfg.SIGNAL_BANDS = ["broadband", *base.BANDS]   # every measure on broadband and on each band
-# 12 s epochs, one per stimulation frequency: K, DFA and fE/I need long signals, so they are
-# computed on the concatenation of the trimmed epochs (10 s each). With CONCATENATE_EPOCHS = False
-# the DFA fit range would shrink to <= 1 s (1/10 of one epoch).
-cfg.CONCATENATE_EPOCHS = True
+# 12 s epochs, one per stimulation frequency: separate trials. Each epoch is filtered alone (padded
+# by reflection) and trimmed to the 10 s of stimulation (EDGE_TRIM_S = 1); K is computed on each
+# 10 s trial (K_CHUNK_S = None) and averaged. Before 2026-11-02 the trimmed epochs (different
+# stimulation frequencies) were concatenated into one long signal for K, DFA and fE/I.
+# DFA and fE/I are left out: long-range temporal correlations need minutes of continuous signal
+# (Hardstone et al. 2012), here there are separate 10 s trials.
+cfg.EDGE_TRIM_S = 1.0
+cfg.K_CHUNK_S = None
+cfg.MEASURES = [m for m in cfg.MEASURES if m not in ("dfa", "fei_ratio")]
+cfg.EQUAL_EPOCHS = True               # covariance width / lambda_max, entropy production on the
+cfg.EQUAL_MODE = "random"             # minimum number of epochs over the subjects (random subsets)
+cfg.EQUAL_DRAWS = base.EQUAL_DRAWS
+cfg.PAD_S = base.PAD_S
 cfg.OVERWRITE = False
 N_JOBS = 7                            # subjects analysed in parallel (8 cores: one left free)
 

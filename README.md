@@ -2,17 +2,28 @@
 
 Code for the computation of brain criticality metrics across three dimensions:
 
+## Data handling common to all modules (`descriptive_analysis/segments.py`, since 2026-11-02)
+- Filtering and Hilbert transforms run on every run of contiguous epochs as one signal (reflection
+  padding at its two ends), then the signal is cut back into the epochs: no per-epoch filter or
+  Hilbert edge effects inside a continuous recording (Ayahuasca: runs from the "<t>s" labels).
+  Separate trials (one IPS epoch per stimulation frequency) are filtered one by one with padding.
+- Indices that depend on the amount of data (number of avalanches, repertoire and pattern diversity,
+  PLV / PPC, metastability, PLI / wPLI / dwPLI / iCOH across epochs, entropy production, covariance
+  width / lambda_max) are computed on the same number of epochs in every subject / condition
+  (`equal_subsets`, mean over subsets).
+- Nothing is concatenated across a gap: DFA and fE/I use windows inside continuous segments, the
+  0-1 test equal-length chunks of continuous signal.
+
 ## 1. Avalanche Criticality
 - Branching ratio
-- Deviation from criticality coefficient
-- Power-law proximity
+- Repertoire and pattern diversity, Fano factor
+- (power-law goodness, exponents and DCC: set aside, see `power_law_goodness/README.md`)
 
 Generic functions in `avalanche_criticality/` (no database-specific code):
 
 | module | content | references |
 |---|---|---|
 | `binarization.py` | channel z-score, ±k SD events at excursion peaks, divergence point from the Gaussian, avalanches by inter-event interval, spatial patterns | Beggs & Plenz 2003; Shriki et al. 2013; Maschke et al. 2024 |
-| `power_law.py` | discrete MLE exponent, Clauset xmin and bootstrap p-value, power-law range and upper cutoff, truncated power law, likelihood-ratio tests, log-log MSE / reduced chi² / residuals, 1/σνz and DCC | Clauset et al. 2009; Alstott et al. 2014; Marshall et al. 2016; Ma et al. 2019; Maschke et al. 2024 |
 | `branching_ratio.py` | σ per time bin (Beggs & Plenz / edgeofpy), first-generation σ, geometric σ per avalanche, sweep over time bins | Beggs & Plenz 2003; Sorrentino et al. 2021 |
 | `repertoire.py` | unique avalanche patterns, repertoire per second and per avalanche, median normalized Hamming distance, shared patterns between groups | Sorrentino et al. 2021; Maschke et al. 2024 |
 | `fano_factor.py` | Fano factor of population activity and FF(W) curve | Fano 1947; Teich et al. 1997; Wilting & Priesemann 2019 |
@@ -20,7 +31,7 @@ Generic functions in `avalanche_criticality/` (no database-specific code):
 Photosensitive database: `photosensitive/MAIN_IPS_AVALAN.py` (analysis, independent from `MAIN_IPS.py`,
 per-subject cache), `photosensitive/plot_ips_avalan.py` (figures only), settings in
 `photosensitive/config_ips_avalan.py`. Requires `numpy scipy pandas matplotlib mne openpyxl powerlaw`
-(`powerlaw` only for the likelihood-ratio tests). Tests: `python avalanche_criticality/test_avalanches.py`.
+(`powerlaw` only for the likelihood-ratio tests of `power_law_goodness/`). Tests: `python avalanche_criticality/test_avalanches.py`.
 
 ## 2. Synchronization Criticality
 - Phase coherence
@@ -36,7 +47,8 @@ Generic functions in `synchrony_criticality/` (no database-specific code):
 | `kuramoto.py` | order parameter R(t), global synchrony (mean R), metastability (std R), random-phase level, circular-shift surrogates | Kuramoto 1984; Acebrón et al. 2005; Arenas et al. 2008; Shanahan 2010 |
 | `phase_coherence.py` | phase coherence matrix (time average per epoch), upper triangle, node strength | Mormann et al. 2000; Lachaux et al. 1999 |
 | `plv.py` | PLV across epochs (time-resolved and averaged), pairwise phase consistency (unbiased) | Lachaux et al. 1999; Vinck et al. 2010 |
-| `lag_insensitive.py` | PLI, weighted PLI, debiased wPLI, imaginary coherence (only the lagged part of the coupling) | Nolte et al. 2004; Stam et al. 2007; Vinck et al. 2011 |
+| `cross_spectral.py` | PLI, wPLI, debiased wPLI, imaginary coherence from multitaper cross-spectra averaged across epochs (used since 2026-11-02) | Nolte et al. 2004; Stam et al. 2007; Vinck et al. 2011 |
+| `lag_insensitive.py` | the same indices from the Hilbert samples of one epoch (old version, kept for comparison) | Nolte et al. 2004; Stam et al. 2007; Vinck et al. 2011 |
 
 Kuramoto GS / M, PC and PLV are inflated (or, for R, cancelled by opposite polarities) by zero-lag
 mixing: volume conduction and, in the 5-component dataset, channels rebuilt from 5 ICA components.
@@ -45,7 +57,9 @@ measure coupling that the mixing cannot produce.
 
 Photosensitive database: `photosensitive/MAIN_IPS_SYNC.py` (analysis, per-subject cache),
 `photosensitive/plot_ips_sync.py` (figures only), settings in `photosensitive/config_ips_sync.py`.
-Results in `syncron_results` next to `criticality_results` (`syncron_results/occipital` for the visual ROI).
+Results in `syncron_results/new_method` next to `criticality_results` (`syncron_results/occipital/new_method`
+for the visual ROI), with `NOTE_new_method.txt`. Metastability is the SD of R(t) over the whole analysed
+signal (not within each epoch).
 Tests: `python synchrony_criticality/test_synchrony.py`.
 
 ## 3. Edge of Chaos
@@ -79,7 +93,8 @@ Tests: `python edge_of_chaos/test_chaos.py`.
 Photosensitive database: `photosensitive/MAIN_IPS_CHAOS.py` (calls `run` with the IPS groups,
 excluded subjects and channel choice, 7 subjects in parallel). Every measure is computed on
 broadband 1-45 Hz and on each band (columns `<measure>_<band>`; the aperiodic exponent only
-broadband). Results and figures in `edge_of_chaos_results` next to `criticality_results`
+broadband). The 0-1 test is computed on each 10 s trial; DFA and fE/I are not computed for IPS
+(separate 10 s trials, no minutes of continuous signal). Results and figures in `edge_of_chaos_results` next to `criticality_results`
 (`edge_of_chaos_results/occipital` for the visual ROI).
 
 ## One figure per index (all modules)

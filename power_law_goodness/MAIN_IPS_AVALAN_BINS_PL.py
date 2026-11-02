@@ -34,7 +34,7 @@ from photosensitive.MAIN_IPS_AVALAN import band_filter
 from photosensitive.plot_ips_avalan import plot_distribution_table
 from descriptive_analysis import plots
 from avalanche_criticality.binarization import zscore_channels, avalanches_from_epochs
-from avalanche_criticality.power_law import fit_power_law, compare_all_distributions, MODELS
+from power_law_goodness.power_law import fit_power_law, compare_all_distributions, MODELS
 
 warnings.filterwarnings("ignore")
 
@@ -116,7 +116,7 @@ def summary(fit):
 
 def main():
     channel_set, channels, out_root = base.choose_channel_set()
-    out_dir = check_output_dir(av.results_dir(channel_set, out_root) / OUT_NAME, ["bin_powerlaw.xlsx"],
+    out_dir = check_output_dir(av.results_dir(channel_set, out_root) / "power law goodness" / OUT_NAME, ["bin_powerlaw.xlsx"],
                                (FALLBACK_DIR if channels is None else FALLBACK_DIR / base.OCCIPITAL_SUBDIR) / OUT_NAME)
     cache_dir = out_dir / "subjects_pl"
     cache_dir.mkdir(exist_ok=True)

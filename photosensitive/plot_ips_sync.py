@@ -123,8 +123,7 @@ def plot_matrices(mats, edges, ch_names, bands, colors, measure, out_png):
 
 def plot_stim_freq(epochs, sf_tests, bands, colors, out_png):
     """figS6: per-subject mean at each stim frequency, group median and IQR; * = p_fdr < ALPHA."""
-    cols = [("gs", "GS"), ("metastability", "metastability"), ("pc_mean", "mean PC"),
-            ("wpli_mean", "mean wPLI")]
+    cols = [("gs", "GS"), ("metastability_epoch", "SD of R in the epoch"), ("pc_mean", "mean PC")]
     cols = [(c, l) for c, l in cols if c in epochs]
     subj = epochs.dropna(subset=["stim_freq"]).groupby(["group", "subject", "band", "stim_freq"])[
         [c for c, _ in cols]].mean().reset_index()
@@ -177,13 +176,13 @@ def plot_plv_time(details, metrics, bands, colors, out_png):
         ax.set_xlabel("time from epoch onset (s)")
     axes[0, 0].set_ylabel("PLV(t), mean over pairs")
     axes[0, 0].legend(fontsize=plots.BASE_FONT - 3)
-    fig.suptitle("Phase locking across epochs (Lachaux et al. 1999); biased by the number of epochs")
+    fig.suptitle("Phase locking across epochs (Lachaux et al. 1999), on the same number of epochs in every subject")
     _save(fig, out_png)
 
 
 def plot_summary_heatmap(metrics, bands, colors, out_png):
     """figS8: group medians (z-scored per row) and group difference (rank-biserial r, Mann-Whitney)."""
-    cols = [("gs", "GS"), ("metastability", "metastability"), ("metastability_pooled", "M pooled"),
+    cols = [("gs", "GS"), ("metastability", "metastability"),
             ("gs_norm", "GS / surrogate"), ("metastability_norm", "M / surrogate"),
             ("pc_mean", "mean PC"), ("plv_mean", "mean PLV"), ("ppc_mean", "mean PPC"),
             ("pli_mean", "mean PLI"), ("wpli_mean", "mean wPLI"), ("dwpli_mean", "mean dwPLI"),
@@ -228,8 +227,7 @@ def plot_summary_heatmap(metrics, bands, colors, out_png):
     _save(fig, out_png)
 
 
-INDEX_LABELS = {"gs": "global synchrony (mean R)", "metastability": "metastability (std R)",
-                "metastability_pooled": "metastability pooled over epochs",
+INDEX_LABELS = {"gs": "global synchrony (mean R)", "metastability": "metastability (SD of R over the signal)",
                 "metastability_cv": "metastability / GS", "gs_norm": "GS / surrogate GS",
                 "metastability_norm": "M / surrogate M", "R_median": "median R", "R_q95": "R, 95th percentile",
                 "pc_mean": "phase coherence (mean over pairs)", "pc_median": "phase coherence (median over pairs)",
@@ -251,7 +249,7 @@ def plot_per_index(metrics, bands, colors, out_dir):
 
 # ------------------------------------------------------------------ MAIN
 def find_results(out_dir, name="synchrony_results.pkl"):
-    for d in (out_dir, FALLBACK_DIR / cfg.OUT_SUBDIR):
+    for d in (out_dir, FALLBACK_DIR / cfg.OUT_SUBDIR / cfg.NEW_METHOD_SUBDIR):
         if (Path(d) / name).exists():
             return Path(d)
     return None
@@ -259,7 +257,7 @@ def find_results(out_dir, name="synchrony_results.pkl"):
 
 def main():
     channel_set, _, out_root = base.choose_channel_set()   # same choice as MAIN_IPS_SYNC
-    out = find_results(cfg.results_dir(channel_set, out_root))
+    out = find_results(cfg.results_dir(channel_set, out_root) / cfg.NEW_METHOD_SUBDIR)
     if out is None:
         raise SystemExit("synchrony_results.pkl not found: run MAIN_IPS_SYNC.py first")
     print("Results read from:", out)
@@ -270,8 +268,7 @@ def main():
     plots.paper_style()
 
     plot_kuramoto_R(details, metrics, bands, colors, out / "figS1_kuramoto_R.png")
-    _band_boxes(metrics, [("gs", "GS (mean R)"), ("metastability", "metastability (std R)"),
-                          ("metastability_pooled", "M pooled over epochs"),
+    _band_boxes(metrics, [("gs", "GS (mean R)"), ("metastability", "metastability\n(SD of R over the signal)"),
                           ("gs_norm", "GS / surrogate GS"), ("metastability_norm", "M / surrogate M")],
                 bands, colors, out / "figS2_gs_metastability.png",
                 "Global synchrony and metastability (Kuramoto; Acebrón et al. 2005) — "

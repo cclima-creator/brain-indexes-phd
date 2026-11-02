@@ -143,3 +143,23 @@ def save_tables_excel(tables, path, sheet_order=()):
             for i, col in enumerate(df.columns, start=1):
                 widths = [len(str(col))] + [len(str(v)) for v in df[col].head(200)]
                 ws.column_dimensions[get_column_letter(i)].width = min(max(widths) + 2, 40)
+
+
+def count_epochs(path):
+    """Number of epochs of an EEGLAB .set (without loading the data) or of an MNE -epo.fif."""
+    if Path(path).suffix.lower() != ".set":
+        return len(mne.read_epochs(str(path), preload=False, verbose="ERROR"))
+    from scipy.io import loadmat
+    m = loadmat(str(path), squeeze_me=True, struct_as_record=False, variable_names=["trials", "EEG"])
+    return int(m["trials"] if "trials" in m else m["EEG"].trials)
+
+
+def source_signature(path):
+    """Path, size and modification time of a .set and its .fdt: a cache is valid only for the same files."""
+    path = Path(path)
+    out = [str(path)]
+    for p in (path, path.with_suffix(".fdt")):
+        if p.exists():
+            st = p.stat()
+            out += [st.st_size, round(st.st_mtime)]
+    return tuple(out)

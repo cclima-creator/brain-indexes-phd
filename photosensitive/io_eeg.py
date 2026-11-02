@@ -131,3 +131,29 @@ def epoch_labels(epochs):           ##l' input epochs sono le epoche salvate in 
 def get_data_uv(epochs):
     """Dati in microvolt, shape (n_epochs, n_channels, n_times)."""
     return epochs.get_data() * 1e6                      ##prende  i dati EEG e cambia la loro unità da V → µV. perche mne li prende automaticamente in V
+
+def count_epochs(path):
+    """Number of epochs of an EEGLAB .set without loading the data."""
+    from scipy.io import loadmat
+    m = loadmat(str(path), squeeze_me=True, struct_as_record=False, variable_names=["trials", "EEG"])
+    return int(m["trials"] if "trials" in m else m["EEG"].trials)
+
+
+def source_signature(path):
+    """Path, size and modification time of a .set and its .fdt: a cache is valid only for the same files."""
+    path = Path(path)
+    out = [str(path)]
+    for p in (path, path.with_suffix(".fdt")):
+        if p.exists():
+            st = p.stat()
+            out += [st.st_size, round(st.st_mtime)]
+    return tuple(out)
+
+
+def n_equal_epochs(files):
+    """
+    Minimum number of epochs over all subjects of all groups: the indices that depend on the amount
+    of data (counts, repertoire, PLV, entropy production, covariance width...) are computed on
+    this many epochs in every subject (random subsets, see descriptive_analysis.segments).
+    """
+    return int(min(count_epochs(f) for f in files))

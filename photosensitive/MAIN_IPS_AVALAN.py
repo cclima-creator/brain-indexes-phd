@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
-MAIN valanghe, database IPS: binarizzazione, neuronal avalanches, power law + DCC, branching ratio,
-repertorio, Fano factor. Separato da MAIN_IPS.py: non rifa' l'analisi preliminare, legge gli stessi
+MAIN valanghe, database IPS: binarizzazione, neuronal avalanches, branching ratio, repertorio,
+Fano factor (power law, esponenti e DCC sono in power_law_goodness/, analisi messa da parte). Separato da MAIN_IPS.py: non rifa' l'analisi preliminare, legge gli stessi
 file .set e (se c'e') il suo results.pkl solo per confrontare le soglie.
 I grafici si fanno dopo con plot_ips_avalan.py (senza rifare l'analisi).
 
@@ -10,9 +10,12 @@ i soggetti gia' analizzati con gli stessi parametri (config_ips_avalan.params) v
 Per rifare tutto: OVERWRITE = True in config_ips_avalan.py.
 
 Pipeline per soggetto e banda (moduli in avalanche_criticality/):
-  filtro passa-banda -> z-score per canale -> eventi oltre ±soglia SD (soglia del gruppo)
-  -> valanghe (IEI 8 ms) -> tau, alpha, 1/(sigma nu z), DCC, cutoff -> branching ratio (+ 4-18 ms)
-  -> repertorio e diversita' dei pattern -> Fano factor
+  filtro passa-banda su ogni tratto continuo (un'epoca IPS = un trial, con padding a riflessione)
+  -> z-score per canale -> eventi oltre ±soglia SD (soglia del gruppo) -> valanghe (bin per banda)
+  -> branching ratio (+ sweep dei bin) -> repertorio e diversita' dei pattern -> Fano factor
+Numero di valanghe, repertorio e diversita' dipendono da quanti dati ci sono: sono calcolati sullo
+stesso numero di epoche per tutti i soggetti (minimo tra i soggetti, media su sottoinsiemi casuali;
+colonne *_alldata = su tutte le epoche, solo controllo).
 
 IEI robusto (avalanche_criticality/iei.py), per ora solo diagnostica (non cambia il time bin):
   stessi eventi -> intervalli tra eventi consecutivi -> log10 -> GMM / valle / fallback
@@ -39,7 +42,7 @@ import mne
 
 from photosensitive import config_ips as base
 from photosensitive import config_ips_avalan as cfg
-from photosensitive.io_eeg import discover_files, load_epochs, get_data_uv
+from photosensitive.io_eeg import discover_files, load_epochs, get_data_uv, source_signature, n_equal_epochs
 from photosensitive.report import (check_output_dir, save_tables_excel, save_results, load_results,
                                    FALLBACK_DIR)
 from photosensitive.MAIN_IPS import pick_channels
@@ -49,28 +52,26 @@ from avalanche_criticality.binarization import (zscore_channels, zscore_histogra
                                                 avalanches_from_epochs, divergence_threshold)
 # from avalanche_criticality.iei import robust_iei    # analisi dell'IEI disattivata (config: RUN_IEI)
 from avalanche_criticality.branching_ratio import branching_ratio, branching_ratio_sweep
-from avalanche_criticality.power_law import avalanche_criticality, compare_all_distributions, MODELS
 from avalanche_criticality.repertoire import repertoire, shared_repertoire
 from avalanche_criticality.fano_factor import fano_factor, fano_curve
+from descriptive_analysis.segments import (apply_on_runs, runs_of_single_epochs, equal_subsets,
+                                           mean_over_subsets)
 
 warnings.filterwarnings("ignore")
 
 OUTPUT_NAMES = ["avalanche_results.xlsx", "avalanche_results.pkl"]   # (iei_results.*: analisi IEI disattivata)
-SHEET_ORDER = ["subject_band_metrics", "group_tests", "group_summary", "distribution_summary",
-               "distribution_fit", "threshold_divergence",
+SHEET_ORDER = ["subject_band_metrics", "group_tests", "group_summary", "threshold_divergence",
                "branching_ratio_bin_tests",
-               "branching_ratio_bins", "power_law_cutoff_scan", "shared_repertoire", "parameters"]
+               "branching_ratio_bins", "shared_repertoire", "parameters"]
 
 # colonne della tabella per soggetto x banda che vengono confrontate tra gruppi
-TEST_METRICS = ["n_avalanches",                    # (mean/median_iei_ms tolti: analisi IEI disattivata)
-                 "avalanche_rate_hz", "mean_size", "mean_duration_bins",
-                "tau", "alpha", "third", "dcc", "dcc_clauset", "dcc_range", "tau_range", "alpha_range",
-                "tau_rigorous", "alpha_rigorous", "third_rigorous", "dcc_rigorous",
-                "size_pct_in_range", "duration_pct_in_range",
-                "size_xmax_cutoff", "size_decades", "duration_xmax_cutoff", "duration_decades",
-                "size_p_gof", "duration_p_gof", "size_mse", "duration_mse",
+# (n_avalanches non e' testato: dipende dalla durata, il rate e' la misura confrontabile)
+TEST_METRICS = ["avalanche_rate_hz", "mean_size", "mean_duration_bins",
                 "sigma_bins", "sigma_geometric", "sigma_ancestors",
                 "repertoire_rate", "repertoire_per_avalanche", "diversity_mean", "ff", "ff_beta"]
+# indici che dipendono dalla quantita' di dati: calcolati sullo stesso numero di epoche (equal_repertoire)
+EQUAL_INDICES = ("n_avalanches", "repertoire_size", "repertoire_rate", "repertoire_per_avalanche",
+                 "frac_patterns_once", "diversity", "diversity_mean", "similarity")
 
 IEI_SHEET_ORDER = ["iei_subject_band", "iei_group_tests", "iei_group_summary", "iei_bimodality",
                    "parameters"]
@@ -81,30 +82,43 @@ IEI_TEST_METRICS = ["iei_mean_ms", "threshold_ms", "intra_median_ms", "inter_med
 
 
 # ================================================================== UN SOGGETTO
-def band_filter(data, sfreq, band):
-    """Filtro passa-banda FIR a fase zero (MNE) su ogni epoca e canale. data: (n_ep, n_ch, n_t)."""
+def band_filter(data, sfreq, band, runs=None, pad_s=2.0):
+    """
+    Filtro passa-banda FIR a fase zero (MNE). data: (n_ep, n_ch, n_t).
+    runs = tratti di epoche contigue (descriptive_analysis.segments): ogni tratto e' filtrato come
+    un segnale unico, con pad_s s di riflessione ai due estremi; None = ogni epoca e' un trial a se'.
+    """
     lo, hi = band
     hi = min(hi, sfreq / 2 - 1)
-    return mne.filter.filter_data(data, sfreq, lo, hi, verbose="ERROR")
+    runs = runs_of_single_epochs(len(data)) if runs is None else runs
+    return apply_on_runs(data, runs, lambda x: mne.filter.filter_data(x, sfreq, lo, hi, verbose="ERROR"),
+                         sfreq, pad_s)
 
 
-def _fit_cols(prefix, f):
-    """Colonne riassuntive di un fit di power_law.fit_power_law."""
-    keys = ["xmin", "p_gof", "plausible", "n_tail", "frac_tail", "D", "alpha_se", "mse", "chi2_red",
-            "residual_trend_rho", "residual_trend_p", "clauset_xmin", "clauset_alpha", "clauset_D",
-            "clauset_n_tail", "range_xmin", "xmax_cutoff", "decades", "alpha_range_se", "p_range",
-            "n_range", "mse_range", "chi2_red_range", "residual_trend_rho_range",
-            "tpl_alpha", "tpl_cutoff", "best_fit"]
-    out = {f"{prefix}_{k}": f.get(k, np.nan) for k in keys}
-    for k, v in f.items():
-        if k.startswith(("R_vs_", "p_vs_")):
-            out[f"{prefix}_{k}"] = v
-    return out
+def equal_repertoire(av, subsets, epoch_s, min_channels, max_patterns):
+    """
+    Numero di valanghe, repertorio e diversita' sullo stesso numero di epoche: per ogni sottoinsieme
+    di epoche (subsets) solo le valanghe di quelle epoche (una valanga non attraversa le epoche),
+    poi media sui sottoinsiemi.
+    """
+    ep = np.array([a["epoch"] for a in av["avalanches"]], int)
+    pat = av["patterns"]
+
+    def one(idx):
+        m = np.isin(ep, idx)
+        p = pat[m] if m.any() else np.zeros((0, max(pat.shape[1], 1)), bool)
+        r, _, _ = repertoire(p, len(idx) * epoch_s, min_channels, max_patterns)
+        return {k: r[k] for k in EQUAL_INDICES}
+    return mean_over_subsets(subsets, one)
 
 
-def analyze_band(data, sfreq, group, sid, band_name, band):
-    """Tutte le misure di valanga per un soggetto in una banda. Ritorna (riga, dettagli)."""
-    x = band_filter(data, sfreq, band)
+def analyze_band(data, sfreq, group, sid, band_name, band, runs=None, subsets=None, pad_s=2.0):
+    """
+    Tutte le misure di valanga per un soggetto in una banda. Ritorna (riga, dettagli).
+    runs: tratti contigui per il filtro (None = epoche separate); subsets: sottoinsiemi di epoche per
+    gli indici che dipendono dalla quantita' di dati (None = tutte le epoche).
+    """
+    x = band_filter(data, sfreq, band, runs, pad_s)
     z = zscore_channels(x)
     zc, zd = zscore_histogram(z)
     thr = cfg.threshold_for(group, band_name)
@@ -126,38 +140,32 @@ def analyze_band(data, sfreq, group, sid, band_name, band):
                mean_duration_bins=float(durs.mean()) if durs.size else np.nan,
                max_duration_bins=int(durs.max()) if durs.size else 0)
 
-    crit = avalanche_criticality(sizes, durs, cfg.XMIN, cfg.N_BOOT, cfg.N_SIM, cfg.MIN_TAIL,
-                                 cfg.THIRD_METHOD)
-    row.update({k: crit[k] for k in ("tau", "alpha", "third", "third_se", "third_r2",
-                                      "predicted_third", "dcc", "scaling_diff", "tau_range",
-                                      "alpha_range", "third_range", "predicted_third_range",
-                                      "dcc_range", "tau_clauset", "alpha_clauset", "third_clauset",
-                                      "dcc_clauset")})
-    row.update(_fit_cols("size", crit["size_fit"]))
-    row.update(_fit_cols("duration", crit["duration_fit"]))
-
     profiles = [a["profile"] for a in av["avalanches"]]
     row.update(branching_ratio(av["events"], sfreq, iei_s, profiles))
     sweep = branching_ratio_sweep(av["events"], sfreq, cfg.BR_BINS_MS)
 
     rep, uniq, counts = repertoire(av["patterns"], av["duration_s"], cfg.REPERTOIRE_MIN_CHANNELS,
                                    cfg.REPERTOIRE_MAX_PATTERNS)
-    row.update({k: v for k, v in rep.items() if k != "n_avalanches"})
+    row.update({f"{k}_alldata": rep[k] for k in EQUAL_INDICES})
+    subsets = subsets or [np.arange(len(data))]
+    row.update(equal_repertoire(av, subsets, data.shape[-1] / sfreq, cfg.REPERTOIRE_MIN_CHANNELS,
+                                cfg.REPERTOIRE_MAX_PATTERNS), n_epochs=len(data),
+               n_epochs_equal=len(subsets[0]), n_equal_draws=len(subsets))
 
     ff, ff_mu, ff_var = fano_factor(av["events"], av["bin_len"])
     curve = fano_curve(av["events"], sfreq)
     row.update(ff=ff, ff_mean=ff_mu, ff_var=ff_var, ff_beta=curve["beta"], ff_beta_se=curve["beta_se"])
 
-    detail = dict(sizes=sizes.astype(np.int32), durations=durs.astype(np.int32),
-                  size_fit=crit["size_fit"], duration_fit=crit["duration_fit"],
-                  third_fit=crit["third_fit"], third_fit_range=crit["third_fit_range"],
-                  br_sweep=sweep, fano_curve=curve, zhist=dict(centers=zc, density=zd),
+    detail = dict(sizes=sizes.astype(np.int32), durations=durs.astype(np.int32), br_sweep=sweep, fano_curve=curve, zhist=dict(centers=zc, density=zd),
                   unique_patterns=uniq, pattern_counts=counts)
     return row, detail
 
 
-def analyze_subject(fpath, group, channels):
-    """Carica un .set e analizza tutte le bande. Ritorna dict(rows, details, ch_names, params)."""
+def analyze_subject(fpath, group, channels, n_equal=None):
+    """
+    Carica un .set e analizza tutte le bande. n_equal = epoche per gli indici che dipendono dalla
+    quantita' di dati (stesso numero per tutti i soggetti). Ritorna dict(rows, details, ch_names, params).
+    """
     ep = load_epochs(fpath, base.FIXED_LENGTH_S, base.ANALYSIS_WINDOW)
     if channels is not None:
         ep = pick_channels(ep, channels, base.OCCIPITAL_CHANNELS)
@@ -165,29 +173,34 @@ def analyze_subject(fpath, group, channels):
     data = get_data_uv(ep)
     print(f"    {data.shape[0]} epoche x {data.shape[1]} canali x {data.shape[2] / sfreq:.1f} s, "
           f"sfreq {sfreq:g} Hz")
+    subsets = equal_subsets(len(data), n_equal, base.EQUAL_DRAWS, base.EQUAL_MODE, base.EQUAL_SEED)
     rows, details = [], {}
     for band_name, band in cfg.BANDS.items():
         t0 = time.time()
-        row, det = analyze_band(data, sfreq, group, fpath.stem, band_name, band)
+        row, det = analyze_band(data, sfreq, group, fpath.stem, band_name, band, None, subsets, base.PAD_S)
         rows.append(row)
         details[band_name] = det
-        print(f"    {band_name:>10}: {row['n_avalanches']:6d} valanghe | tau {row['tau']:.2f} "
-              f"alpha {row['alpha']:.2f} DCC {row['dcc']:.3f} | sigma {row['sigma_bins']:.3f} | "
-              f"repertorio {row['repertoire_size']} | FF {row['ff']:.2f}  ({time.time() - t0:.0f} s)")
+        print(f"    {band_name:>10}: {row['n_avalanches_alldata']:6d} valanghe | sigma {row['sigma_bins']:.3f} | "
+              f"repertorio {row['repertoire_size']:.0f} su {row['n_epochs_equal']} epoche | FF {row['ff']:.2f}  "
+              f"({time.time() - t0:.0f} s)")
     return dict(rows=rows, details=details, ch_names=list(ep.ch_names), params=cfg.params(),
-                sfreq=sfreq)
+                source=source_signature(fpath), n_equal=n_equal, sfreq=sfreq)
 
 
-def load_or_run(fpath, group, channels, cache_dir):
-    """Rilegge la cache del soggetto se ha gli stessi parametri, altrimenti analizza e salva."""
+def load_or_run(fpath, group, channels, cache_dir, n_equal=None):
+    """
+    Rilegge la cache del soggetto se ha gli stessi parametri, lo stesso file (percorso, dimensione,
+    data) e lo stesso numero di epoche per gli indici bilanciati; altrimenti analizza e salva.
+    """
     cache = cache_dir / f"{fpath.stem}.pkl"
     if cache.exists() and not cfg.OVERWRITE:
         res = load_results(cache)
-        if res.get("params") == cfg.params():
+        if (res.get("params") == cfg.params() and res.get("source") == source_signature(fpath)
+                and res.get("n_equal") == n_equal):
             print("    (gia' analizzato: letto dalla cache)")
             return res
-        print("    parametri cambiati: rianalizzo")
-    res = analyze_subject(fpath, group, channels)
+        print("    parametri, file o numero di epoche cambiati: rianalizzo")
+    res = analyze_subject(fpath, group, channels, n_equal)
     with open(cache, "wb") as f:
         pickle.dump(res, f)
     return res
@@ -388,21 +401,9 @@ def group_tables(df):
 
 
 def long_tables(subjects):
-    """Branching ratio per time bin e scansione del cutoff, una riga per soggetto x banda x valore."""
-    br, scan = [], []
-    for s in subjects:
-        for b, det in s["details"].items():
-            for r in det["br_sweep"]:
-                br.append(dict(group=s["group"], subject=s["subject"], band=b, **r))
-            for var in ("size", "duration"):
-                rng = det[f"{var}_fit"]
-                scan.append(dict(group=s["group"], subject=s["subject"], band=b, variable=var,
-                                 range_xmin=rng.get("range_xmin"), xmax_cutoff=rng.get("xmax_cutoff"),
-                                 decades=rng.get("decades"), alpha_range=rng.get("alpha_range"),
-                                 p_range=rng.get("p_range"), clauset_xmin=rng.get("xmin"),
-                                 clauset_alpha=rng.get("alpha"), clauset_p=rng.get("p_gof"),
-                                 tpl_cutoff=rng.get("tpl_cutoff")))
-    return pd.DataFrame(br), pd.DataFrame(scan)
+    """Branching ratio per time bin, una riga per soggetto x banda x bin."""
+    return pd.DataFrame([dict(group=s["group"], subject=s["subject"], band=b, **r)
+                         for s in subjects for b, det in s["details"].items() for r in det["br_sweep"]])
 
 
 def branching_bin_tests(br):
@@ -428,76 +429,6 @@ def branching_bin_tests(br):
                     r["p_fdr"] = q
                 rows += part
     return pd.DataFrame(rows)
-
-
-def add_rigorous_exponents(df):
-    """
-    Esponenti "rigorosi": solo le pendenze del range in cui la power law regge (linea arancio della
-    fig. A3) e solo se in quel range cade piu' di MIN_PCT_IN_RANGE % delle valanghe; altrimenti NaN.
-      size_pct_in_range / duration_pct_in_range : % di valanghe nel range power law
-      tau_rigorous   = tau_range   se size_pct_in_range > soglia
-      alpha_rigorous = alpha_range se duration_pct_in_range > soglia
-      third_rigorous = third_range (1/sigma nu z sulle durate nel range) se duration_pct_in_range > soglia
-      dcc_rigorous   = dcc_range (formula di Maschke) se entrambe le distribuzioni superano la soglia
-    """
-    n = df["n_avalanches"].where(df["n_avalanches"] > 0)
-    df["size_pct_in_range"] = 100 * df["size_n_range"].fillna(0) / n
-    df["duration_pct_in_range"] = 100 * df["duration_n_range"].fillna(0) / n
-    ok_s = df["size_pct_in_range"] > cfg.MIN_PCT_IN_RANGE
-    ok_d = df["duration_pct_in_range"] > cfg.MIN_PCT_IN_RANGE
-    df["tau_rigorous"] = df["tau_range"].where(ok_s)
-    df["alpha_rigorous"] = df["alpha_range"].where(ok_d)
-    df["third_rigorous"] = df["third_range"].where(ok_d)
-    df["dcc_rigorous"] = df["dcc_range"].where(ok_s & ok_d)
-    return df
-
-
-def distribution_tables(subjects, out_dir):
-    """
-    Per ogni soggetto, banda e variabile (S, T):
-      - percentuale di valanghe nel range in cui la power law regge (tratto arancio della fig. A3:
-        n_range / n; 0 se nessun range regge) e decadi del range
-      - power law plausibile (p di Clauset >= 0.1)
-      - miglior modello tra power law, troncata, lognormale, esponenziale, esponenziale stirata e
-        confidenza (power_law.compare_all_distributions)
-    I confronti sono salvati in distribution_cache.pkl (chiave: soggetto, banda, variabile, parametri):
-    rilanciando si ricalcolano solo quelli nuovi.
-    Ritorna (tabella per soggetto, riassunto per banda x gruppo x variabile).
-    """
-    cache_path = out_dir / "distribution_cache.pkl"
-    cache = load_results(cache_path) if cache_path.exists() else {}
-    key_par = repr(sorted(cfg.params().items()))
-    rows = []
-    for s in subjects:
-        for b, det in s["details"].items():
-            for var, xs in (("size", det["sizes"]), ("duration", det["durations"])):
-                f = det[f"{var}_fit"]
-                key = (s["subject"], b, var, key_par)
-                if key not in cache:
-                    cache[key] = compare_all_distributions(xs, cfg.XMIN)
-                c = cache[key]
-                n = len(xs)
-                rows.append(dict(
-                    group=s["group"], subject=s["subject"], band=b, variable=var, n_avalanches=n,
-                    pct_in_pl_range=100 * f.get("n_range", 0) / n if n else np.nan,
-                    range_xmin=f.get("range_xmin"), xmax_cutoff=f.get("xmax_cutoff"),
-                    decades=f.get("decades"), p_gof=f.get("p_gof"), pl_plausible=bool(f.get("plausible")),
-                    best_model=c["best"], confidence=c["confidence"], tpl_cutoff=c.get("tpl_cutoff"),
-                    **{k: v for k, v in c.items() if k.startswith(("R_", "p_"))}))
-    save_results(cache, cache_path)
-    fit = pd.DataFrame(rows)
-    summ = []
-    for (b, g, var), d in fit.groupby(["band", "group", "variable"], sort=False):
-        pct = d.pct_in_pl_range
-        row = dict(band=b, group=g, variable=var, n_subjects=len(d),
-                   pct_in_pl_range_median=pct.median(), pct_in_pl_range_q25=pct.quantile(.25),
-                   pct_in_pl_range_q75=pct.quantile(.75), decades_median=d.decades.median(),
-                   n_pl_plausible=int(d.pl_plausible.sum()), n_strong=int((d.confidence == "strong").sum()))
-        for m in MODELS:
-            row[f"n_best_{m}"] = int((d.best_model == m).sum())
-        row["n_ambiguous"] = int((d.confidence == "ambiguous").sum())
-        summ.append(row)
-    return fit, pd.DataFrame(summ)
 
 
 def shared_patterns(subjects):
@@ -530,9 +461,11 @@ def main():
     if cfg.RUN_IEI:                                   # analisi dell'IEI disattivata (config)
         iei_cache_dir.mkdir(exist_ok=True)
     print("Cartella di output:", out_dir)
-    print(f"Soglie (SD): {cfg.THRESHOLD_SD} | IEI {cfg.BIN_SAMPLES if cfg.IEI_MODE == 'per_band' else str(cfg.MAX_IEI_MS) + ' ms'}{' campioni' if cfg.IEI_MODE == 'per_band' else ''} | eventi '{cfg.EVENT_MODE}' | "
-          f"bootstrap {cfg.N_BOOT}")
+    print(f"Soglie (SD): {cfg.THRESHOLD_SD} | IEI {cfg.BIN_SAMPLES if cfg.IEI_MODE == 'per_band' else str(cfg.MAX_IEI_MS) + ' ms'}{' campioni' if cfg.IEI_MODE == 'per_band' else ''} | eventi '{cfg.EVENT_MODE}'")
 
+    n_equal = n_equal_epochs(base.all_subject_files(cfg.GROUPS))
+    print(f"Indici che dipendono dalla quantita' di dati: {n_equal} epoche per soggetto "
+          f"({base.EQUAL_DRAWS} sottoinsiemi casuali)")
     subjects, iei_subjects, t_start = [], [], time.time()
     for group, folder in cfg.GROUPS.items():
         files = base.subject_files(group, discover_files(folder))
@@ -541,7 +474,7 @@ def main():
             print("  ", fpath.name)
             try:
                 if cfg.RUN_AVALANCHES:
-                    res = load_or_run(fpath, group, channels, cache_dir)
+                    res = load_or_run(fpath, group, channels, cache_dir, n_equal)
                     subjects.append(dict(group=group, subject=fpath.stem, **res))
                 if cfg.RUN_IEI:
                     res = load_or_run_iei(fpath, group, channels, iei_cache_dir)
@@ -562,10 +495,8 @@ def save_avalanche_results(subjects, out_dir, out_root, channel_set):
 
     df = pd.DataFrame([r for s in subjects for r in s["rows"]])
     df = df.drop(columns=["mean_iei_ms", "median_iei_ms"], errors="ignore")   # IEI disattivata (cache vecchie)
-    df = add_rigorous_exponents(df)
     tests, summary = group_tables(df)
-    dist_fit, dist_summary = distribution_tables(subjects, out_dir)
-    br_long, scan = long_tables(subjects)
+    br_long = long_tables(subjects)
     br_tests = branching_bin_tests(br_long)
     div_rows, div_curves = band_divergence(subjects)
     prelim = preliminary_divergence(out_root)
@@ -584,16 +515,14 @@ def save_avalanche_results(subjects, out_dir, out_root, channel_set):
     params = pd.DataFrame([dict(parameter=k, value=str(v)) for k, v in cfg.params().items()])
     tables = {"subject_band_metrics": df, "group_tests": tests, "group_summary": summary,
               "threshold_divergence": divergence, "branching_ratio_bins": br_long, "branching_ratio_bin_tests": br_tests,
-              "power_law_cutoff_scan": scan, "shared_repertoire": shared,
-              "distribution_summary": dist_summary, "distribution_fit": dist_fit, "parameters": params}
+              "shared_repertoire": shared, "parameters": params}
     save_tables_excel(tables, out_dir / "avalanche_results.xlsx", SHEET_ORDER)
     # per i grafici: tutto tranne i pattern (restano nelle cache per soggetto)
     details = {(s["group"], s["subject"], b): {k: v for k, v in det.items()
                                                if k not in ("unique_patterns", "pattern_counts")}
                for s in subjects for b, det in s["details"].items()}
     save_results(dict(metrics=df, tests=tests, summary=summary, details=details, br=br_long,
-                      br_tests=br_tests, dist_fit=dist_fit, dist_summary=dist_summary,
-                      scan=scan, divergence=divergence, divergence_curves=div_curves,
+                      br_tests=br_tests, divergence=divergence, divergence_curves=div_curves,
                       shared=shared, params=cfg.params(), channel_set=channel_set,
                       bands=dict(cfg.BANDS)),
                  out_dir / "avalanche_results.pkl")

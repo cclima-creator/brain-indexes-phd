@@ -35,7 +35,7 @@ from photosensitive.MAIN_IPS import pick_channels
 from photosensitive.MAIN_IPS_AVALAN import band_filter
 from photosensitive.MAIN_IPS_AMPLITUDE_DIST import amplitude_sample, OUT_NAME, SEED
 from photosensitive.plot_ips_avalan import _save
-from avalanche_criticality.power_law import _tpl_log_norm_continuous
+from power_law_goodness.power_law import _tpl_log_norm_continuous
 from descriptive_analysis import plots
 from descriptive_analysis.plots import _label
 
