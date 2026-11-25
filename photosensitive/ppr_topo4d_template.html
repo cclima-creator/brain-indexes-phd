@@ -96,7 +96,8 @@ details b{color:var(--ink)}
     <summary>How to read it and how it is computed</summary>
     <p>Each head is one axis of the criticality space, built only from <b>local</b> measures (per electrode or per electrode pair). Global indices (branching ratio, pattern repertoire, power-law exponents, metastability, 0-1 test, λmax) describe the whole system and have no topography. The “axis” colour is the mean z of the axis measures. Each z is computed per electrode against pre 2: (value − mean in pre 2) / SD in pre 2, with the SD not below 1/4 of the SD over the whole segment. The menu on each head shows each measure on its own; “raw values” shows single measures in their own units.</p>
     <p><b>Power</b>: median frequency (SEF50) of the 1–45 Hz spectrum. <b>Synchrony</b>: coherence between electrodes (wPLI in the chosen band). The colour is each electrode's mean coupling with all the others; the lines are the most coupled pairs. Photic driving is also included (SNR at the flash frequency and its 2nd harmonic). <b>Chaos</b>: Lempel-Ziv complexity divided by that of phase-randomised surrogates with the same spectrum, so it does not repeat the Power axis. <b>Avalanches</b>: event rate, share of avalanches that start at the electrode, and mean number of electrodes recruited by the avalanches it starts. Events are peaks beyond ±k SD; an avalanche is a run of consecutive bins with events.</p>
-    <p><b>Coherence band</b>: the frequency range the signals are band-pass filtered in before phase coupling is measured. Two electrodes are coupled in a band when their oscillations in that range keep a consistent phase lag. Different bands can show different networks (e.g. beta for the response driven by 18 Hz flashes, delta/theta for the spike-wave).</p>
+    <p><b>Coherence band</b>: the frequency range the signals are band-pass filtered in before phase coupling is measured. Two electrodes are coupled in a band when their oscillations in that range keep a consistent phase lag. Different bands can show different networks. <b>flash</b> = flash frequency of this PPR ± 1.5 Hz and <b>flash 2f</b> = its 2nd harmonic ± 1.5 Hz: phase locking between electrodes at the rhythm imposed by the stimulation (default when the flash frequency is known). The fixed bands (delta to gamma) show the brain's own rhythms, e.g. delta/theta for the spike-wave.</p>
+    <p><b>Chance level of coherence</b>: on short windows and narrow bands the wPLI is high even between independent signals (noise, 2 s window, 3 Hz band: mean ≈ 0.45). For each band the chance level is the wPLI between independent noise channels filtered in the same band, on windows of the same length. (Time-shifted copies of the data are not used: with periodic stimulation two driven channels keep a constant phase relation even after shifting, and the threshold would hide exactly the locking to the flashes.) Lines are drawn only for pairs above the 99th percentile of this noise, so about 1% of all pairs cross it by chance (the expected number is shown under the head). The colour is the mean excess above chance, (wPLI − surrogate mean) / (1 − surrogate mean). Coherence uses 2 s windows.</p>
     <p>On 1–2 s windows the estimates are noisy. After onset the spike-wave inflates almost every measure: the new information is before onset and in the first few hundred ms. Click a head to choose the electrode shown in the plots below; click the EEG or the timeline to move in time. Keys: ← → to step, space for Play.</p>
   
 </details>
@@ -111,7 +112,7 @@ const SYNC=D.axes.find(a=>a.key==='sync');
 $('sub').textContent=[m.patient&&('Patient '+m.patient), m.ppr,
   D.phases.stim&&D.phases.stim.freq?('flashes '+D.phases.stim.freq+' Hz'):null,
   m.csd?'measures on CSD':'original reference',
-  'windows '+m.window_s+' s (avalanches '+m.aval_window_s+' s), step '+m.step_s+' s',
+  'windows '+m.window_s+' s (coherence '+m.sync_window_s+' s, avalanches '+m.aval_window_s+' s), step '+m.step_s+' s',
   'events ±'+m.event_sd+' SD, bin '+m.aval_bin_ms+' ms'].filter(Boolean).join('  ·  ');
 $('sim').hidden=!m.simulated;
 
@@ -187,11 +188,13 @@ function drawHead(a){
   headOutline(ctx,W,F.S);
   let note='';
   if(ax.key==='sync'&&+$('nlines').value>0){       // linee: coppie piu' accoppiate
-    const pv=ax.pairs[bandSel.value][ti],idx=pv.map((v,k)=>k).filter(k=>pv[k]!==null).sort((x,y)=>pv[y]-pv[x]).slice(0,+$('nlines').value);
-    if(idx.length){const vmax=pv[idx[0]],vmin=pv[idx[idx.length-1]];
+    const bi=ax.measures.find(x=>x.bands).bands[bandSel.value],thr=bi.chance_p99,sm=m.sync_method==='plv'?'PLV':'wPLI';
+    const pv=ax.pairs[bandSel.value][ti],above=pv.map((v,k)=>k).filter(k=>pv[k]!==null&&pv[k]>thr),idx=above.sort((x,y)=>pv[y]-pv[x]).slice(0,+$('nlines').value);
+    note=`lines: no pair above chance (${sm} > ${thr.toFixed(2)}), ${bandSel.value}`;
+    if(idx.length){const vmax=pv[idx[0]],vmin=thr;
       idx.slice().reverse().forEach(k=>{const [i,j]=ax.pair_index[k],q=(pv[k]-vmin)/((vmax-vmin)||1);
         ctx.strokeStyle=`rgba(255,255,255,${.25+.7*q})`;ctx.lineWidth=1+3.5*q;ctx.beginPath();ctx.moveTo(F.px(CH[i]),F.py(CH[i]));ctx.lineTo(F.px(CH[j]),F.py(CH[j]));ctx.stroke();});
-      note=`lines: ${idx.length} pairs with the highest ${m.sync_method==='plv'?'PLV':'wPLI'} (${vmin.toFixed(2)}–${vmax.toFixed(2)}), ${bandSel.value}`;}}
+      note=`lines: ${idx.length} of ${above.length} pairs above chance (${sm} > ${thr.toFixed(2)}, max ${vmax.toFixed(2)}; ~${Math.max(1,Math.round(pv.length/100))} expected by chance), ${bandSel.value}`;}}
   CH.forEach((c,k)=>{const px=F.px(c),py=F.py(c);
     ctx.beginPath();ctx.arc(px,py,k===sel?6:3.2,0,7);ctx.fillStyle=vals[k]===null?'#555':'#0a0e16';ctx.fill();
     ctx.lineWidth=k===sel?2.5:1.2;ctx.strokeStyle=k===sel?'#fff':'#dfe6f3';ctx.stroke();

@@ -15,6 +15,15 @@ topografia: qui non ci sono. Per ogni asse si tengono misure locali non ridondan
   Synchrony (coerenza: quali parti sono piu' connesse)
     coupling  per coppia: wPLI nella banda scelta (linee); per elettrodo: node strength = media
               del wPLI con gli altri elettrodi (colore)                                       (Vinck 2011)
+              Bande: delta-gamma fisse e, se e' data --stim-freq, "flash" = f +- 1 Hz e
+              "flash 2f" = 2f +- 1 Hz, cioe' l'aggancio di fase tra elettrodi al ritmo dei flash di
+              quella PPR (default in quel caso).
+              Livello di caso: con finestre brevi e bande strette il wPLI e' alto anche tra segnali
+              indipendenti (rumore, 2 s, banda 3 Hz: media ~0.45). Per ogni banda si stima la
+              distribuzione del wPLI tra canali di rumore indipendente filtrati nella stessa banda,
+              sulla stessa finestra. Le linee mostrano solo le coppie sopra il 99°
+              percentile del rumore (circa l'1% delle coppie lo supera per caso); il colore e' l'eccesso medio sopra il caso,
+              (wPLI - media surrogati) / (1 - media surrogati).
               wPLI e non PLV: ignora l'accoppiamento a lag zero prodotto dalla conduzione di volume.
               SYNC_METHOD = "plv" per la PLV (utile su CSD, include la sincronia a lag zero).
     driving   aggancio allo stimolo: SNR (dB) alla frequenza dei flash e alla 2a armonica.
@@ -59,13 +68,16 @@ from synchrony_criticality.phase import bandpass_filter, analytic_signal
 TEMPLATE = Path(__file__).with_name("ppr_topo4d_template.html")
 
 # ---- parametri di default
-WINDOW_S = 1.0            # finestra per power, synchrony, chaos
+WINDOW_S = 1.0            # finestra per power, driving, chaos
+SYNC_WINDOW_S = 2.0       # finestra per la coerenza: su 1 s il wPLI in banda stretta e' quasi sempre alto per caso
+N_CHANCE_WINDOWS = 80     # finestre dei surrogati per la soglia di caso della coerenza
 AVAL_WINDOW_S = 2.0       # finestra per le misure delle valanghe (servono abbastanza eventi)
 STEP_S = 0.1              # passo tra finestre
 BROAD_BAND = (1.0, 45.0)
 SYNC_BANDS = {"delta": (1.0, 4.0), "theta": (4.0, 8.0), "alpha": (8.0, 13.0),
               "beta": (13.0, 30.0), "gamma": (30.0, 45.0)}
-SYNC_DEFAULT = "beta"
+SYNC_DEFAULT = "beta"     # se c'e' la frequenza dei flash il default diventa "flash"
+FLASH_HALF_WIDTH = 1.5    # bande "flash" e "flash 2f": frequenza di stimolo (e 2a armonica) +- 1.5 Hz
 SYNC_METHOD = "wpli"      # "wpli" o "plv"
 SNR_NEIGHBORS = (1.5, 3.0)  # driving: bin vicini tra 1.5 e 3 Hz da entrambi i lati
 N_SURROGATES = 4          # surrogati a fase casuale per la LZ normalizzata
@@ -81,7 +93,7 @@ def axes_spec(sync_method=SYNC_METHOD):
         dict(key="power", name="Power", lo="low frequencies", hi="high frequencies",
              measures=[dict(key="mf", name="median frequency", unit="Hz")]),
         dict(key="sync", name="Synchrony", lo="asynchrony", hi="synchrony",
-             measures=[dict(key="coupling", name=f"coherence ({sm} node strength)", unit=sm, banded=True),
+             measures=[dict(key="coupling", name=f"coherence ({sm} above chance)", unit=f"{sm} excess", banded=True),
                        dict(key="driving", name="photic driving (SNR f, 2f)", unit="dB")]),
         dict(key="chaos", name="Chaos", lo="order", hi="chaos",
              measures=[dict(key="lzc_ns", name="LZ / phase surrogates", unit="ratio")]),
@@ -194,8 +206,39 @@ def avalanche_measures(eb, avs, j0, j1, win_s):
     return rate, lead, reach
 
 
+def sync_bands(stim_freq=None, half=FLASH_HALF_WIDTH):
+    """Bande della coerenza: quelle fisse piu' 'flash' (f +- half) e 'flash 2f' se stim_freq e' data."""
+    out = {}
+    if stim_freq:
+        out["flash"] = (stim_freq - half, stim_freq + half)
+        if 2 * stim_freq + half <= BROAD_BAND[1]:
+            out["flash 2f"] = (2 * stim_freq - half, 2 * stim_freq + half)
+    out.update(SYNC_BANDS)
+    return out
+
+
+def coupling_chance(band, sfreq, win_n, method=SYNC_METHOD, n_win=N_CHANCE_WINDOWS, n_ch=16, seed=0):
+    """
+    Livello di caso del wPLI/PLV dovuto solo alla stima su una finestra breve in una banda:
+    canali di rumore bianco indipendenti, filtrati nella stessa banda, accoppiamento su finestre
+    della stessa durata. Ritorna (media, 99° percentile) su tutte le coppie e finestre.
+    (Non si usano surrogati spostati nel tempo dei dati: con una stimolazione periodica due canali
+    guidati restano in fase costante anche dopo lo spostamento, e la soglia nasconderebbe proprio
+    l'aggancio ai flash.)
+    """
+    rng = np.random.default_rng(seed)
+    pad = int(2 * sfreq)
+    x = rng.standard_normal((n_ch, n_win * win_n + 2 * pad))
+    z = analytic_signal(bandpass_filter(x, sfreq, band))[:, pad:-pad]
+    iu = np.triu_indices(n_ch, 1)
+    v = np.concatenate([pair_coupling(z[:, k * win_n:(k + 1) * win_n], method)[iu]
+                        for k in range(n_win)])
+    return float(v.mean()), float(np.percentile(v, 99))
+
+
 def compute_measures(data, sfreq, t_start, t_before, t_after, stim_freq=None, win_s=WINDOW_S,
-                     aval_win_s=AVAL_WINDOW_S, step_s=STEP_S, sync_method=SYNC_METHOD, seed=0):
+                     aval_win_s=AVAL_WINDOW_S, sync_win_s=SYNC_WINDOW_S, step_s=STEP_S,
+                     sync_method=SYNC_METHOD, seed=0):
     """
     data: (n_ch, n_t) che inizia al tempo t_start (s, relativo all'esordio) e copre almeno
     [-t_before - PAD_S, t_after + PAD_S].
@@ -208,34 +251,41 @@ def compute_measures(data, sfreq, t_start, t_before, t_after, stim_freq=None, wi
 
     n_ch = data.shape[0]
     broad = bandpass_filter(data, sfreq, BROAD_BAND)
-    zb = {b: analytic_signal(bandpass_filter(data, sfreq, rg)) for b, rg in SYNC_BANDS.items()}
+    bands = sync_bands(stim_freq)
+    zb = {b: analytic_signal(bandpass_filter(data, sfreq, rg)) for b, rg in bands.items()}
     a, b = idx(-t_before), idx(t_after)
     eb = event_bins(broad[:, a:b], sfreq)
     avs = avalanches_from_bins(eb)
     bin_n = max(1, int(round(AVAL_BIN_S * sfreq)))
 
-    tc = window_centers(-t_before, t_after, max(win_s, aval_win_s), step_s)
+    sw = int(round(sync_win_s * sfreq))
+    chance = {bd: coupling_chance(rg, sfreq, sw, sync_method, seed=seed) for bd, rg in bands.items()}
+    tc = window_centers(-t_before, t_after, max(win_s, aval_win_s, sync_win_s), step_s)
     iu = np.triu_indices(n_ch, 1)
     nw = tc.size
     M = {k: np.full((nw, n_ch), np.nan) for k in ("mf", "driving", "lzc_ns", "rate", "lead", "reach")}
-    node = {bd: np.full((nw, n_ch), np.nan) for bd in SYNC_BANDS}
-    pairs = {bd: np.zeros((nw, iu[0].size)) for bd in SYNC_BANDS}
+    node = {bd: np.full((nw, n_ch), np.nan) for bd in bands}
+    pairs = {bd: np.zeros((nw, iu[0].size)) for bd in bands}
     for w, t in enumerate(tc):
         i0, i1 = idx(t - win_s / 2), idx(t + win_s / 2)
         M["mf"][w] = median_frequency(broad[:, i0:i1], sfreq)
         if stim_freq:
             M["driving"][w] = photic_snr(data[:, i0:i1], sfreq, stim_freq)
         M["lzc_ns"][w] = [lzc_surrogate_ratio(c, rng=rng) for c in broad[:, i0:i1]]
+        s0 = idx(t - sync_win_s / 2)
         for bd, z in zb.items():
-            C = pair_coupling(z[:, i0:i1], sync_method)
+            C = pair_coupling(z[:, s0:s0 + sw], sync_method)
             pairs[bd][w] = C[iu]
-            np.fill_diagonal(C, np.nan)
-            node[bd][w] = np.nanmean(C, 1)
+            mu = chance[bd][0]
+            E = (C - mu) / (1 - mu)                      # eccesso sopra il caso
+            np.fill_diagonal(E, np.nan)
+            node[bd][w] = np.nanmean(E, 1)
         j0 = max(0, (idx(t - aval_win_s / 2) - a) // bin_n)
         j1 = (idx(t + aval_win_s / 2) - a) // bin_n
         M["rate"][w], M["lead"][w], M["reach"][w] = avalanche_measures(eb, avs, j0, j1, aval_win_s)
     events = [[int(k), np.flatnonzero(eb[:, k]).tolist()] for k in np.flatnonzero(eb.any(0))]
-    return dict(times=tc, measures=M, node=node, pairs=pairs, pair_index=np.c_[iu].tolist(),
+    return dict(times=tc, measures=M, node=node, pairs=pairs, bands=bands, chance=chance,
+                pair_index=np.c_[iu].tolist(),
                 events=dict(bin_s=AVAL_BIN_S, t0=-t_before, n_bins=int(eb.shape[1]), bins=events))
 
 
@@ -325,9 +375,12 @@ def build_payload(data, eeg, sfreq, info, t_start, meta, phases, ref, t_before, 
         keep = []
         for ms in ax["measures"]:
             if ms.get("banded"):
-                ms["bands"] = {bd: dict(range=list(SYNC_BANDS[bd]), raw=_r(v), z=_r(baseline_z(v, tc, ref)))
+                ms["bands"] = {bd: dict(range=[round(x, 2) for x in res["bands"][bd]], raw=_r(v),
+                                        z=_r(baseline_z(v, tc, ref)),
+                                        chance_mean=round(res["chance"][bd][0], 3),
+                                        chance_p99=round(res["chance"][bd][1], 3))
                                for bd, v in res["node"].items()}
-                ms["default_band"] = SYNC_DEFAULT
+                ms["default_band"] = "flash" if "flash" in res["bands"] else SYNC_DEFAULT
             else:
                 v = res["measures"][ms["key"]]
                 if not np.isfinite(v).any():
@@ -392,7 +445,8 @@ def main(argv=None):
     phases = default_phases(end_rel, a.before, after, stim, rel(a.eyes_closed))
     meta = dict(patient=a.patient, ppr=a.ppr_label, file=Path(a.file).name, simulated=a.simulated,
                 csd=a.csd, sfreq=sf, window_s=WINDOW_S, aval_window_s=AVAL_WINDOW_S, step_s=STEP_S,
-                sync_method=a.sync_method, event_sd=EVENT_SD, aval_bin_ms=AVAL_BIN_S * 1000)
+                sync_method=a.sync_method, sync_window_s=SYNC_WINDOW_S, event_sd=EVENT_SD,
+                aval_bin_ms=AVAL_BIN_S * 1000)
     ref = (phases["segments"][0]["t0"], phases["segments"][0]["t1"])
     write_html(build_payload(data, eeg, sf, info, t_start, meta, phases, ref, a.before, after,
                              stim_freq=a.stim_freq, sync_method=a.sync_method), a.out)
