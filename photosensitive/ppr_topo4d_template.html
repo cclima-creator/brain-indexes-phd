@@ -1,0 +1,195 @@
+<!doctype html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PPR spazio 4D topografico</title>
+<style>
+:root{--bg:#0a0e16;--panel:#111827;--line:#232c3d;--ink:#e6ebf5;--mute:#8b96ab;--accent:#7aa7ff;--warn:#ff5a5f}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+main{max-width:1180px;margin:0 auto;padding:20px 16px 40px}
+h1{font-size:24px;margin:0 0 2px;letter-spacing:.2px}
+.sub{color:var(--mute);margin-bottom:12px}
+.sim{background:#3a1116;border:1px solid var(--warn);color:#ffd5d6;padding:8px 12px;border-radius:8px;margin:8px 0 14px;font-weight:600}
+.bar{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:6px 0 12px}
+button,select{background:var(--panel);color:var(--ink);border:1px solid var(--line);border-radius:7px;padding:6px 11px;font:inherit;cursor:pointer}
+button.on{border-color:var(--accent);color:var(--accent)}
+.tnow{margin-left:auto;font-weight:700;font-variant-numeric:tabular-nums}
+.tnow span{font-weight:600;padding:2px 8px;border-radius:6px;margin-left:6px;color:#0a0e16}
+.grid{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}
+@media (max-width:1000px){.grid{grid-template-columns:repeat(2,1fr)}}
+.grid>.card,.lower>.card{min-width:0}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:10px 10px 8px}
+.card h2{font-size:15px;margin:0;display:flex;justify-content:space-between;align-items:baseline}
+.card h2 small{color:var(--mute);font-weight:400;font-size:11px}
+.card canvas.head{width:100%;aspect-ratio:1/1;display:block;cursor:crosshair}
+.cb{font-size:11px;color:var(--mute)}
+.cb canvas{width:100%;height:9px;border-radius:3px;display:block}
+.cb div{display:flex;justify-content:space-between;margin-top:2px}
+#timeline{width:100%;height:58px;display:block;cursor:pointer;margin-top:10px}
+.lower{display:grid;grid-template-columns:repeat(2,1fr);gap:10px;margin-top:12px}
+@media (max-width:700px){.lower{grid-template-columns:1fr}}
+.lower canvas{width:100%;height:150px;display:block}
+.legend{display:flex;flex-wrap:wrap;gap:10px;font-size:12px;color:var(--mute);margin:12px 0 2px}
+.legend i{display:inline-block;width:14px;height:3px;vertical-align:middle;margin-right:4px;border-radius:2px}
+details{margin-top:16px;color:var(--mute)}
+details b{color:var(--ink)}
+</style>
+</head>
+<body>
+<main>
+  <h1>Spazio 4D topografico della PPR</h1>
+  <div class="sub" id="sub"></div>
+  <div class="sim" id="sim" hidden>DATI SIMULATI: EEG sintetico per provare lo strumento. Non è il paziente e non è una PPR reale.</div>
+
+  <div class="bar">
+    <button id="play">▶ Play</button>
+    <select id="speed"><option value="0.5">0.5×</option><option value="1" selected>1×</option><option value="2">2×</option></select>
+    <button id="mZ" class="on">z rispetto a pre 2</button>
+    <button id="mR">valori grezzi</button>
+    <label style="color:var(--mute)">|z| max <select id="zmax"><option>2</option><option selected>3</option><option>5</option></select></label>
+    <div class="tnow" id="tnow"></div>
+  </div>
+
+  <div class="grid" id="grid"></div>
+  <canvas id="timeline"></canvas>
+
+  <div class="legend" id="legend"></div>
+  <div class="lower" id="lower"></div>
+
+  <details>
+    <summary>Come leggere e come è calcolato</summary>
+    <p>Ogni testa è un asse dello spazio di criticità, calcolato per ogni elettrodo in una finestra scorrevole. Il colore è il valore interpolato tra gli elettrodi (inverse distance). <b>Modalità z</b>: per ogni elettrodo, (valore − media in pre 2) / SD in pre 2 (SD con un minimo pari a 1/4 della SD su tutto il segmento). Mostra quanto ogni zona si allontana dal proprio stato prima della PPR (rosso = verso il polo “alto” dell’asse, blu = verso il polo “basso”). <b>Valori grezzi</b>: scala comune a tutti i tempi (percentili 2–98).</p>
+    <p><b>Power</b>: log10 P(1–8 Hz)/P(13–45 Hz). <b>Synchrony</b>: PLV media con gli altri elettrodi (fase di Hilbert, banda indicata sopra). <b>Avalanches</b>: branching ratio locale, Σ e<sub>i</sub>(t)N(t+1) / Σ e<sub>i</sub>(t)N(t) sui time bin in cui l’elettrodo ha un evento (picchi oltre ±3 SD; grigio = meno di 3 eventi nella finestra); &lt;1 assorbente, &gt;1 in espansione. <b>Chaos</b>: Lempel-Ziv (LZ76) normalizzata del segnale 1–45 Hz.</p>
+    <p>Clicca su una testa per scegliere l’elettrodo mostrato in bianco nei grafici in basso. Le linee colorate sono le medie per regione. Su finestre di 1–2 s il branching e la LZC sono stime rumorose. Dopo l’esordio la punta-onda gonfia potenza, sincronia e valanghe: l’informazione nuova sta prima dell’esordio e nei primi centinaia di ms.</p>
+  </details>
+</main>
+<script>
+const DATA = /*__DATA__*/null;
+(function(){
+const D = DATA, T = D.times, NT = T.length, CH = D.channels, NC = CH.length;
+// posizioni: x = verso destra, y = verso il naso (coordinate testa MNE proiettate)
+CH.forEach(c=>{c.r=c.x;c.a=c.y;});
+const $ = id => document.getElementById(id);
+const m = D.meta;
+$('sub').textContent = [m.patient && ('Paziente ' + m.patient), m.ppr,
+  D.phases.stim && D.phases.stim.freq ? ('stimolazione ' + D.phases.stim.freq + ' Hz') : null,
+  m.csd ? 'CSD' : 'riferimento originale',
+  'finestre ' + m.window_s + ' s (valanghe ' + m.aval_window_s + ' s), passo ' + m.step_s + ' s',
+  'PLV ' + m.sync_band.join('–') + ' Hz'].filter(Boolean).join('  ·  ');
+$('sim').hidden = !m.simulated;
+
+// ---------- regioni
+const REG = [['occipitale','#ff6b6b'],['parietale','#ffb347'],['centrale','#4fd1c5'],['frontale','#7aa7ff'],['temporale','#c39bff']];
+function region(n){ n=n.toUpperCase();
+  if(/^(O|PO|I)/.test(n)) return 0;
+  if(/^(CP|P|T5|T6)/.test(n)) return 1;
+  if(/^(FT|TP|T)/.test(n)) return 4;
+  if(/^(FC|C)/.test(n)) return 2;
+  return 3; }
+const regOf = CH.map(c=>region(c.name));
+
+// ---------- colori
+function lerp(a,b,t){return a.map((v,i)=>v+(b[i]-v)*t)}
+function ramp(stops,t){t=Math.max(0,Math.min(1,t));const k=t*(stops.length-1),i=Math.min(stops.length-2,Math.floor(k));return lerp(stops[i],stops[i+1],k-i)}
+const DIV=[[40,90,200],[70,140,235],[34,42,60],[255,140,80],[255,70,70]];
+const SEQ=[[13,8,40],[80,20,110],[180,50,110],[245,120,70],[252,220,120]];
+
+let mode='z', zmax=3, ti=0, playing=false, sel=CH.findIndex(c=>/^O1$/i.test(c.name)); if(sel<0) sel=0;
+const rangeRaw = D.axes.map(ax=>{const v=ax.raw.flat().filter(x=>x!==null).sort((a,b)=>a-b);
+  return [v[Math.floor(.02*(v.length-1))], v[Math.floor(.98*(v.length-1))]]});
+function colorOf(a,v){ if(v===null||!isFinite(v)) return null;
+  if(mode==='z') return ramp(DIV,(v/zmax+1)/2);
+  const [lo,hi]=rangeRaw[a]; return ramp(SEQ,(v-lo)/((hi-lo)||1)); }
+
+// ---------- teste
+const G=110, R=0.5, cells=[];
+for(let j=0;j<G;j++)for(let i=0;i<G;i++){const x=(i+.5)/G-.5, y=.5-(j+.5)/G; if(x*x+y*y<=R*R){
+  const w=CH.map(c=>{const d2=(x-c.r)**2+(y-c.a)**2; return 1/Math.pow(d2+1e-5,1.5)}); cells.push({i,j,w});}}
+const heads=[];
+D.axes.forEach((ax,a)=>{
+  const card=document.createElement('div');card.className='card';
+  card.innerHTML=`<h2>${ax.name}<small>${ax.unit}</small></h2><canvas class="head" width="440" height="440"></canvas>
+    <div class="cb"><canvas width="200" height="9"></canvas><div><span>← ${ax.lo}</span><span>${ax.hi} →</span></div></div>`;
+  $('grid').appendChild(card);
+  const cv=card.querySelector('canvas.head'), cb=card.querySelectorAll('canvas')[1];
+  cv.addEventListener('click',e=>{const r=cv.getBoundingClientRect(),px=(e.clientX-r.left)/r.width-.5,py=.5-(e.clientY-r.top)/r.height;
+    let best=0,bd=1e9;CH.forEach((c,k)=>{const d=(px-c.r)**2+(py-c.a)**2;if(d<bd){bd=d;best=k}});sel=best;drawAll();});
+  heads.push({cv,cb,ctx:cv.getContext('2d'),img:document.createElement('canvas')});
+});
+
+function drawColorbar(h,a){const c=h.cb.getContext('2d');for(let i=0;i<200;i++){const v=mode==='z'?(i/199*2-1)*zmax:rangeRaw[a][0]+(rangeRaw[a][1]-rangeRaw[a][0])*i/199;
+  const col=colorOf(a,v);c.fillStyle=`rgb(${col.map(Math.round)})`;c.fillRect(i,0,1,9)}}
+
+function drawHead(a){
+  const h=heads[a], ctx=h.ctx, W=h.cv.width, ax=D.axes[a], vals=(mode==='z'?ax.z:ax.raw)[ti];
+  h.img.width=G;h.img.height=G;const ic=h.img.getContext('2d'),im=ic.createImageData(G,G);
+  for(const c of cells){let s=0,sw=0;for(let k=0;k<NC;k++){const v=vals[k];if(v!==null){s+=c.w[k]*v;sw+=c.w[k]}}
+    const col=sw?colorOf(a,s/sw):[60,60,70];const o=4*(c.j*G+c.i);im.data[o]=col[0];im.data[o+1]=col[1];im.data[o+2]=col[2];im.data[o+3]=255;}
+  ic.putImageData(im,0,0);
+  ctx.clearRect(0,0,W,W);const S=W*0.86, O=(W-S)/2;
+  ctx.save();ctx.beginPath();ctx.arc(W/2,W/2,S/2,0,7);ctx.clip();ctx.imageSmoothingEnabled=true;ctx.drawImage(h.img,O,O,S,S);ctx.restore();
+  ctx.strokeStyle='#c9d3e6';ctx.lineWidth=2;ctx.beginPath();ctx.arc(W/2,W/2,S/2,0,7);ctx.stroke();
+  ctx.beginPath();ctx.moveTo(W/2-S*.06,W/2-S/2+2);ctx.lineTo(W/2,W/2-S/2-S*.07);ctx.lineTo(W/2+S*.06,W/2-S/2+2);ctx.stroke();
+  [-1,1].forEach(sg=>{ctx.beginPath();ctx.ellipse(W/2+sg*(S/2+S*.025),W/2,S*.03,S*.08,0,0,7);ctx.stroke();});
+  CH.forEach((c,k)=>{const px=W/2+c.r*S,py=W/2-c.a*S,v=vals[k];
+    ctx.beginPath();ctx.arc(px,py,k===sel?6:3.2,0,7);ctx.fillStyle=v===null?'#555':'#0a0e16';ctx.fill();
+    ctx.lineWidth=k===sel?2.5:1.2;ctx.strokeStyle=k===sel?'#fff':'#dfe6f3';ctx.stroke();
+    ctx.fillStyle=k===sel?'#fff':'rgba(230,235,245,.85)';ctx.font=(k===sel?'bold ':'')+'12px system-ui';ctx.textAlign='center';ctx.fillText(c.name,px,py-8);});
+  drawColorbar(h,a);
+}
+
+// ---------- timeline
+const tl=$('timeline'), t0=T[0], t1=T[NT-1];
+function tx(t,w){return 40+(t-t0)/(t1-t0)*(w-60)}
+function drawTimeline(){const dpr=devicePixelRatio||1,w=tl.clientWidth,h=58;tl.width=w*dpr;tl.height=h*dpr;const c=tl.getContext('2d');c.scale(dpr,dpr);
+  c.fillStyle='#1a2130';c.fillRect(40,14,w-60,8);
+  D.phases.segments.forEach(s=>{c.fillStyle=s.color;c.fillRect(tx(Math.max(s.t0,t0),w),14,tx(Math.min(s.t1,t1),w)-tx(Math.max(s.t0,t0),w),8);
+    c.fillStyle=s.color;c.font='11px system-ui';c.textAlign='center';c.fillText(s.name,(tx(Math.max(s.t0,t0),w)+tx(Math.min(s.t1,t1),w))/2,10);});
+  const st=D.phases.stim;if(st){c.fillStyle='#8b96ab';const a=tx(Math.max(st.t0,t0),w),b=tx(Math.min(st.t1,t1),w);c.fillRect(a,30,b-a,2);c.font='11px system-ui';c.textAlign='left';c.fillText('flash '+(st.freq||'')+' Hz',a,44);}
+  if(D.phases.eyes_closed!==null&&D.phases.eyes_closed!==undefined){const e=tx(D.phases.eyes_closed,w);c.strokeStyle='#ddd';c.setLineDash([3,3]);c.beginPath();c.moveTo(e,12);c.lineTo(e,34);c.stroke();c.setLineDash([]);c.fillStyle='#ddd';c.textAlign='center';c.fillText('occhi chiusi',e,56);}
+  c.strokeStyle='#8b96ab';c.beginPath();for(let s=Math.ceil(t0);s<=t1;s++){c.moveTo(tx(s,w),24);c.lineTo(tx(s,w),27)}c.stroke();
+  const x=tx(T[ti],w);c.fillStyle='#fff';c.beginPath();c.arc(x,18,7,0,7);c.fill();
+  c.strokeStyle='rgba(255,255,255,.7)';c.beginPath();c.moveTo(x,24);c.lineTo(x,32);c.stroke();}
+function seek(e){const r=tl.getBoundingClientRect(),w=r.width,t=t0+(e.clientX-r.left-40)/(w-60)*(t1-t0);
+  let b=0;T.forEach((v,k)=>{if(Math.abs(v-t)<Math.abs(T[b]-t))b=k});ti=b;drawAll();}
+let drag=false;tl.addEventListener('mousedown',e=>{drag=true;seek(e)});addEventListener('mousemove',e=>{if(drag)seek(e)});addEventListener('mouseup',()=>drag=false);
+tl.addEventListener('touchstart',e=>{seek(e.touches[0])},{passive:true});tl.addEventListener('touchmove',e=>{seek(e.touches[0])},{passive:true});
+
+// ---------- grafici per regione + elettrodo
+$('legend').innerHTML=REG.filter((r,k)=>regOf.includes(k)).map(r=>`<span><i style="background:${r[1]}"></i>${r[0]}</span>`).join('')+'<span><i style="background:#fff"></i><b id="selname"></b></span>';
+const lower=D.axes.map(ax=>{const d=document.createElement('div');d.className='card';d.innerHTML=`<h2>${ax.name}<small>${ax.lo} ↓ · ↑ ${ax.hi}</small></h2><canvas></canvas>`;$('lower').appendChild(d);return d.querySelector('canvas')});
+function regMean(arr,r){return arr.map(row=>{let s=0,n=0;row.forEach((v,k)=>{if(regOf[k]===r&&v!==null){s+=v;n++}});return n?s/n:null})}
+function drawLower(){D.axes.forEach((ax,a)=>{const cv=lower[a],dpr=devicePixelRatio||1,w=cv.clientWidth,h=150;cv.width=w*dpr;cv.height=h*dpr;const c=cv.getContext('2d');c.scale(dpr,dpr);
+  const arr=mode==='z'?ax.z:ax.raw, series=REG.map((r,k)=>regOf.includes(k)?regMean(arr,k):null), me=arr.map(r=>r[sel]);
+  let all=[];series.forEach(s=>s&&s.forEach(v=>v!==null&&all.push(v)));me.forEach(v=>v!==null&&all.push(v));all.sort((x,y)=>x-y);
+  let lo=all[Math.floor(.01*(all.length-1))],hi=all[Math.floor(.99*(all.length-1))];if(mode==='z'){const z=Math.max(Math.abs(lo),Math.abs(hi),1);lo=-z;hi=z}const pad=(hi-lo)*.08;lo-=pad;hi+=pad;
+  const X=t=>34+(t-t0)/(t1-t0)*(w-44),Y=v=>8+(hi-v)/(hi-lo)*(h-26);
+  D.phases.segments.forEach(s=>{c.fillStyle=s.color+'22';c.fillRect(X(Math.max(s.t0,t0)),8,X(Math.min(s.t1,t1))-X(Math.max(s.t0,t0)),h-26)});
+  c.strokeStyle='#2a3447';c.beginPath();if(mode==='z'){c.moveTo(34,Y(0));c.lineTo(w-10,Y(0))}c.stroke();
+  c.fillStyle='#8b96ab';c.font='10px system-ui';c.textAlign='right';[lo+pad,(lo+hi)/2,hi-pad].forEach(v=>c.fillText(v.toFixed(mode==='z'?1:2),30,Y(v)+3));
+  c.textAlign='center';for(let s=Math.ceil(t0);s<=t1;s+=1)c.fillText((s>0?'+':'')+s,X(s),h-6);
+  const line=(s,col,lw,dash)=>{c.strokeStyle=col;c.lineWidth=lw;c.setLineDash(dash||[]);c.beginPath();let up=false;s.forEach((v,k)=>{if(v===null){up=false;return}const p=[X(T[k]),Y(v)];up?c.lineTo(...p):c.moveTo(...p);up=true});c.stroke();c.setLineDash([])};
+  series.forEach((s,k)=>s&&line(s,REG[k][1],1.6));line(me,'#fff',2.2,[5,3]);
+  c.strokeStyle='rgba(255,255,255,.6)';c.lineWidth=1;c.beginPath();c.moveTo(X(T[ti]),8);c.lineTo(X(T[ti]),h-18);c.stroke();});
+  $('selname').textContent='elettrodo '+CH[sel].name+' ('+REG[regOf[sel]][0]+')';}
+
+function drawAll(){D.axes.forEach((_,a)=>drawHead(a));drawTimeline();drawLower();
+  const ph=D.phases.segments.find(s=>T[ti]>=s.t0&&T[ti]<s.t1);
+  $('tnow').innerHTML=`t = ${T[ti]>=0?'+':''}${T[ti].toFixed(2)} s dall’esordio PPR`+(ph?`<span style="background:${ph.color}">${ph.name}</span>`:'');}
+
+// ---------- controlli
+let last=0;function loop(ts){if(!playing)return;if(ts-last>=(D.meta.step_s*1000)/(+$('speed').value)){last=ts;ti=(ti+1)%NT;drawAll()}requestAnimationFrame(loop)}
+$('play').onclick=()=>{playing=!playing;$('play').textContent=playing?'❚❚ Pausa':'▶ Play';if(playing)requestAnimationFrame(loop)};
+$('mZ').onclick=()=>{mode='z';$('mZ').classList.add('on');$('mR').classList.remove('on');drawAll()};
+$('mR').onclick=()=>{mode='raw';$('mR').classList.add('on');$('mZ').classList.remove('on');drawAll()};
+$('zmax').onchange=e=>{zmax=+e.target.value;drawAll()};
+addEventListener('keydown',e=>{if(e.key==='ArrowRight'){ti=Math.min(NT-1,ti+1);drawAll()}if(e.key==='ArrowLeft'){ti=Math.max(0,ti-1);drawAll()}if(e.key===' '){e.preventDefault();$('play').click()}});
+addEventListener('resize',()=>{drawTimeline();drawLower()});
+ti=T.findIndex(t=>t>=D.phases.segments[0].t0);if(ti<0)ti=0;
+drawAll();
+})();
+</script>
+</body>
+</html>
